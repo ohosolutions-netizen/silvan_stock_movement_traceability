@@ -306,22 +306,62 @@ function money(n){ return "₹"+(Number(n)||0).toLocaleString('en-IN'); }
 
 /* =========================================================================
    3) DATA ACCESS  — fetch every matching record from a report (paged).
-   Uses the widget SDK: ZOHO.CREATOR.API.getAllRecords({...})
+   Works with BOTH Creator SDKs:
+     - legacy widget SDK : ZOHO.CREATOR.API.getAllRecords({appName,reportName,...})
+     - newer JS SDK      : ZOHO.CREATOR.DATA.getRecords({app_name,report_name,...})
+   A hard timeout guarantees a call can never hang the UI silently.
    ========================================================================= */
+var FETCH_TIMEOUT_MS = 25000;
+
+function sdkInfo(){
+  var C = (typeof ZOHO!=="undefined" && ZOHO.CREATOR) ? ZOHO.CREATOR : null;
+  return {
+    present: !!C,
+    keys: C ? Object.keys(C) : [],
+    apiGetAll: !!(C && C.API && typeof C.API.getAllRecords==="function"),
+    dataGet:   !!(C && C.DATA && typeof C.DATA.getRecords==="function")
+  };
+}
+
+function callGetRecords(reportName, criteria, page){
+  var C = ZOHO.CREATOR, info = sdkInfo();
+  if(info.apiGetAll){
+    var cfg = { appName: APP_NAME, reportName: reportName, page: page, pageSize: PAGE_SIZE };
+    if(criteria) cfg.criteria = criteria;
+    return C.API.getAllRecords(cfg);
+  }
+  if(info.dataGet){
+    var cfg2 = { app_name: APP_NAME, report_name: reportName, page: page, max_records: PAGE_SIZE };
+    if(criteria) cfg2.criteria = criteria;
+    return C.DATA.getRecords(cfg2);
+  }
+  return Promise.reject({ message:"No records method on ZOHO.CREATOR (need API.getAllRecords or DATA.getRecords). Available: "+info.keys.join(", ") });
+}
+
+function withTimeout(p, ms, label){
+  return new Promise(function(resolve, reject){
+    var t = setTimeout(function(){ reject({ timeout:true, message:"timed out after "+(ms/1000)+"s", report:label }); }, ms);
+    Promise.resolve(p).then(
+      function(v){ clearTimeout(t); resolve(v); },
+      function(e){ clearTimeout(t); reject(e); }
+    );
+  });
+}
+
 function fetchAll(reportName, criteria){
   var out = [];
   function grab(page){
-    var cfg = { appName: APP_NAME, reportName: reportName, page: page, pageSize: PAGE_SIZE };
-    if(criteria) cfg.criteria = criteria;
-    return ZOHO.CREATOR.API.getAllRecords(cfg).then(function(resp){
+    return withTimeout(callGetRecords(reportName, criteria, page), FETCH_TIMEOUT_MS, reportName)
+    .then(function(resp){
       var data = (resp && resp.data) ? resp.data : [];
       out = out.concat(data);
       if(data.length === PAGE_SIZE) return grab(page+1); // more pages
       return out;
-    }).catch(function(err){
-      // code 3100 / no records is not a real error — return what we have.
+    })
+    .catch(function(err){
+      // "no records" is not a real error — return what we have.
       if(err && (err.code===3100 || err.code==="3100")) return out;
-      throw {report:reportName, err:err};
+      throw err;
     });
   }
   return grab(1);
@@ -339,38 +379,62 @@ function eqCriteria(field, val){
 var RAW = {};   // last raw responses, for the debug panel
 var STATE = { view:"product", itemCode:"", itemName:"", rows:[] };
 
+var PROG = {}; // per-report progress for the status banner
+function paintProgress(code){
+  var info = sdkInfo();
+  var order=[["sdk","SDK"],["itemMaster","Item Master"],["salesOrder","Sales Order"],["purchaseOrder","Purchase Order"],["invoice","Invoice"],["creditNote","Credit Note"],["batchTransfer","Batch Transfer"]];
+  var lines = order.filter(function(o){return PROG[o[0]]!==undefined;}).map(function(o){
+    return '<div style="font-size:12px"><b>'+o[1]+':</b> '+PROG[o[0]]+'</div>';
+  }).join("");
+  var method = info.apiGetAll ? "API.getAllRecords" : (info.dataGet ? "DATA.getRecords" : "NONE FOUND ⚠");
+  setStatus("info",
+    'Fetching traceability for <b>'+code+'</b>… <span style="opacity:.7">(data method: <code>'+method+'</code>)</span>'+
+    '<div style="margin-top:8px;display:grid;gap:2px">'+lines+'</div>');
+}
+
 function loadItem(code){
   STATE.itemCode = code;
   $("item-code-tag").textContent = code || "—";
   $("item-name-tag").textContent = "Loading…";
-  setStatus("info", "Fetching traceability for <b>"+code+"</b> across all reports…");
+  PROG = { sdk: sdkInfo().apiGetAll || sdkInfo().dataGet ? "✓ ready" : "✗ no data method — keys: "+sdkInfo().keys.join(", ") };
+  paintProgress(code);
 
-  var jobs = [
-    fetchAll(FIELD.itemMaster.report,    eqCriteria(FIELD.itemMaster.itemCode, code)).then(function(d){RAW.itemMaster=d;return d;}),
-    fetchAll(FIELD.salesOrder.report,    eqCriteria(FIELD.salesOrder.itemCode, code)).then(function(d){RAW.salesOrder=d;return d;}),
-    fetchAll(FIELD.purchaseOrder.report, eqCriteria(FIELD.purchaseOrder.itemCode, code)).then(function(d){RAW.purchaseOrder=d;return d;}),
-    fetchAll(FIELD.invoice.report,       eqCriteria(FIELD.invoice.itemCode, code)).then(function(d){RAW.invoice=d;return d;}),
-    fetchAll(FIELD.creditNote.report,    eqCriteria(FIELD.creditNote.itemCode, code)).then(function(d){RAW.creditNote=d;return d;})
+  var specs = [
+    ["itemMaster",    FIELD.itemMaster.report,    eqCriteria(FIELD.itemMaster.itemCode, code)],
+    ["salesOrder",    FIELD.salesOrder.report,    eqCriteria(FIELD.salesOrder.itemCode, code)],
+    ["purchaseOrder", FIELD.purchaseOrder.report, eqCriteria(FIELD.purchaseOrder.itemCode, code)],
+    ["invoice",       FIELD.invoice.report,       eqCriteria(FIELD.invoice.itemCode, code)],
+    ["creditNote",    FIELD.creditNote.report,    eqCriteria(FIELD.creditNote.itemCode, code)]
   ];
+  specs.forEach(function(s){ PROG[s[0]]="…"; });
+  paintProgress(code);
 
-  // Batch transfer has no item-code field -> filter by item NAME once we know it,
-  // handled after item master resolves. For now fetch is deferred.
-  Promise.all(jobs).then(function(res){
-    var itemMaster = res[0], so = res[1], po = res[2], inv = res[3], cn = res[4];
+  var results = {};
+  var jobs = specs.map(function(s){
+    return fetchAll(s[1], s[2]).then(
+      function(d){ results[s[0]]=d; RAW[s[0]]=d; PROG[s[0]]="✓ "+d.length+" record(s)"; paintProgress(code); },
+      function(e){ results[s[0]]=[]; RAW[s[0]]=[]; PROG[s[0]]="✗ "+((e&&(e.message||e.code))||"error"); paintProgress(code); console.error("["+s[1]+"]", e); }
+    );
+  });
+
+  Promise.all(jobs).then(function(){
+    var itemMaster=results.itemMaster||[], so=results.salesOrder||[], po=results.purchaseOrder||[], inv=results.invoice||[], cn=results.creditNote||[];
     STATE.itemName = itemMaster.length ? lv(itemMaster[0][FIELD.itemMaster.fields.name]) : (so.length? lv(so[0][FIELD.salesOrder.fields.name]) : code);
     $("item-name-tag").textContent = STATE.itemName || code;
 
-    // now batch transfer, filtered by item name (best available key)
+    // Batch transfer: no item-code field -> filter by item NAME (best available key).
+    PROG.batchTransfer="…"; paintProgress(code);
     var btCrit = STATE.itemName ? eqCriteria(FIELD.batchTransfer.itemNameField+".display_value", STATE.itemName) : null;
-    fetchAll(FIELD.batchTransfer.report, btCrit).then(function(bt){RAW.batchTransfer=bt;}).catch(function(){RAW.batchTransfer=[];}).finally(function(){
+    fetchAll(FIELD.batchTransfer.report, btCrit).then(
+      function(bt){ RAW.batchTransfer=bt; PROG.batchTransfer="✓ "+bt.length+" record(s)"; },
+      function(e){ RAW.batchTransfer=[]; PROG.batchTransfer="✗ "+((e&&(e.message||e.code))||"error"); console.error("[batchTransfer]", e); }
+    ).then(function(){
       transformAndRender({itemMaster:itemMaster, so:so, po:po, inv:inv, cn:cn, bt:RAW.batchTransfer||[]});
       renderDebug();
+      // if every report failed, keep the diagnostic banner up instead of a blank table
+      var anyOk = specs.some(function(s){ return (results[s[0]]||[]).length>=0 && String(PROG[s[0]]).indexOf("✓")===0; });
+      if(!anyOk){ paintProgress(code); }
     });
-  }).catch(function(e){
-    console.error(e);
-    var rep = e && e.report ? e.report : "a report";
-    setStatus("err", "Couldn't load <b>"+rep+"</b>. This is almost always a wrong field link name in the <code>FIELD</code> config — open the <b>Field discovery</b> panel below to see the real keys. Raw error: <code>"+ (e && e.err ? JSON.stringify(e.err) : e) +"</code>");
-    renderDebug();
   });
 }
 
@@ -429,11 +493,16 @@ function transformAndRender(D){
   if(D.bt.length){ rows.forEach(function(row){ row.transit=[ lv(D.bt[0][F.batchTransfer.fields.request]), "", "moving"]; }); }
 
   STATE.rows = rows;
-  setStatus(null);
 
-  // warn if nothing came back at all
-  if(!rows.length && !invoices.length){
-    setStatus("warn", "No records found for item code <b>"+STATE.itemCode+"</b> in any report. If you expected data, the item-code field link names in the config are probably off — check the <b>Field discovery</b> panel.");
+  // Distinguish "empty" from "failed": list any report whose call errored.
+  var failed = Object.keys(PROG).filter(function(k){ return String(PROG[k]).indexOf("✗")===0; })
+                     .map(function(k){ return k+" ("+PROG[k]+")"; });
+  if(failed.length){
+    setStatus("err", "Some reports failed to load — usually a wrong report name, wrong item-code field link name, or the item code doesn't exist:<div style='margin-top:6px'>"+failed.join("<br>")+"</div>Open <b>Field discovery</b> below for the real keys.");
+  } else if(!rows.length && !invoices.length){
+    setStatus("warn", "No records found for item code <b>"+STATE.itemCode+"</b> in any report. Either this item has no movement, or the item-code field link names in the config are off — check <b>Field discovery</b> below.");
+  } else {
+    setStatus(null);
   }
   render();
 }
