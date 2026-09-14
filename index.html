@@ -681,16 +681,24 @@ function boot(){
     return;
   }
 
-  ZOHO.CREATOR.init().then(function(){
+  setStatus("info","Initializing Creator SDK… <span style='opacity:.7'>(ZOHO.CREATOR.init)</span>");
+
+  // init() can hang forever if the widget is loaded as an external URL instead of
+  // an uploaded Creator widget — so race it against a timeout and report clearly.
+  withTimeout(ZOHO.CREATOR.init(), 15000, "init").then(function(){
     var params = (ZOHO.CREATOR.UTIL && ZOHO.CREATOR.UTIL.getQueryParams) ? ZOHO.CREATOR.UTIL.getQueryParams() : {};
     var code = getItemCodeParam(params);
     if(code){ loadItem(code); }
     else {
-      setStatus("warn","No <b>item_code</b> parameter received from the page. Pass it as a widget page parameter named <code>item_code</code>.");
+      setStatus("warn","SDK initialized, but no <b>item_code</b> parameter was received. Available params: <code>"+escapeHtml(JSON.stringify(params))+"</code>. Pass a page parameter named <code>item_code</code>.");
       $('test-bar').style.display="block";
     }
   }).catch(function(e){
-    setStatus("err","ZOHO.CREATOR.init() failed: <code>"+JSON.stringify(e)+"</code>");
+    if(e && e.timeout){
+      setStatus("err","<b>ZOHO.CREATOR.init() timed out.</b> The SDK loaded but never connected to a Creator session. This almost always means the widget is embedded as an <b>external URL (e.g. the Vercel link) inside the page</b>, instead of being <b>packaged with ZET and uploaded as a Creator widget</b>. Live data needs the uploaded-widget route. You can still preview the layout below.");
+    } else {
+      setStatus("err","ZOHO.CREATOR.init() failed: <code>"+escapeHtml(JSON.stringify(e))+"</code>");
+    }
     $('test-bar').style.display="block";
   });
 }
