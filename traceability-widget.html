@@ -1,0 +1,635 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Inter-Branch Stock Movement — Traceability (Zoho Creator Widget)</title>
+
+<!-- ============================================================= -->
+<!-- ZOHO CREATOR WIDGET JS SDK v2                                  -->
+<!-- India DC. If your app is served from another DC, swap the host -->
+<!-- (.com / .eu / .com.au etc). The widget SDK auto-detects the    -->
+<!-- API host after init(), so this loader host is not critical.    -->
+<!-- ============================================================= -->
+<script src="https://js.zohostatic.in/creatorv2/6.0/widgets/js/lib/widgetsdk-min.js"></script>
+<!-- Fallback loader (uncomment if the above 404s in your DC):
+<script src="https://js.zohostatic.com/zohocreator/v2/widgetsdk/widgetsdk-min.js"></script>
+-->
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#EEF1F4; --surface:#FFFFFF; --surface-2:#F7F9FB;
+    --ink:#182230; --ink-2:#48566A; --muted:#7A8798;
+    --line:#E1E6EC; --line-2:#EDF0F4;
+    --primary:#0E6E8C; --primary-ink:#0A5064; --primary-wash:#E4F1F5;
+    --req:#6B7A8F; --req-w:#EDF0F4;
+    --po:#4C56C0; --po-w:#EAECFA;
+    --transit:#B76E00; --transit-w:#FBF0DE;
+    --recv:#0E6E8C; --recv-w:#E1F0F4;
+    --bill:#2F6DB0; --bill-w:#E7F0FA;
+    --inv:#1C7B4D; --inv-w:#E2F2E9;
+    --dead:#C0392B; --dead-w:#FAE7E4;
+    --ret:#7E4F9E; --ret-w:#F1E9F8;
+    --radius:10px; --shadow:0 1px 2px rgba(24,34,48,.06),0 4px 16px rgba(24,34,48,.05);
+    font-synthesis:none;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{background:var(--bg);color:var(--ink);font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px;line-height:1.45;-webkit-font-smoothing:antialiased}
+  .mono{font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace}
+
+  .wrap{max-width:1560px;margin:0 auto;padding:18px 18px 60px}
+  .rpt-head{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;margin-bottom:14px;flex-wrap:wrap}
+  .rpt-head h1{font-size:19px;font-weight:700;letter-spacing:-.2px}
+  .rpt-head .item-tag{margin-top:4px;display:inline-flex;align-items:center;gap:8px}
+  .rpt-head .item-tag .code{font-size:12.5px;font-weight:600;color:var(--primary-ink);background:var(--primary-wash);padding:3px 10px;border-radius:20px}
+  .rpt-head .item-tag .nm{font-size:13px;color:var(--muted)}
+  .head-actions{display:flex;gap:8px}
+  .btn{border:1px solid var(--line);background:var(--surface);color:var(--ink-2);font:inherit;font-size:12.5px;font-weight:500;padding:8px 13px;border-radius:8px;cursor:pointer;display:inline-flex;align-items:center;gap:7px;transition:.14s}
+  .btn:hover{border-color:#c8d2dd;background:var(--surface-2)}
+  .btn svg{width:14px;height:14px}
+
+  .viewbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:11px;gap:14px;flex-wrap:wrap}
+  .seg{display:inline-flex;background:var(--surface-2);border:1px solid var(--line);border-radius:8px;padding:3px}
+  .seg button{border:none;background:none;font:inherit;font-size:12.5px;font-weight:600;color:var(--ink-2);padding:6px 14px;border-radius:6px;cursor:pointer;transition:.14s}
+  .seg button.on{background:#fff;color:var(--primary-ink);box-shadow:0 1px 2px rgba(24,34,48,.1)}
+  .result-count{font-size:12.5px;color:var(--muted)}
+  .result-count b{color:var(--ink-2)}
+  .legend{display:flex;gap:16px;flex-wrap:wrap;margin:0 0 10px;font-size:11.5px;color:var(--muted)}
+  .legend span{display:inline-flex;align-items:center;gap:6px}
+  .legend i{width:20px;height:0;border-top:2px solid var(--line);display:inline-block}
+  .legend i.dash{border-top-style:dashed}
+  .legend i.solid2{border-top:2px solid #cbd4dc}
+
+  .table-card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden}
+  .table-scroll{overflow-x:auto}
+  table{width:100%;border-collapse:collapse}
+  #tbl.lines-view{min-width:2260px}
+  thead th{background:var(--surface-2);text-align:left;font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;padding:9px 11px;border-bottom:1px solid var(--line);white-space:nowrap;vertical-align:middle;position:sticky;top:0}
+  thead th.num{text-align:right}
+  thead th.grp{text-align:center;background:#E9EEF3;border-left:2px solid var(--line);color:var(--ink-2);font-size:10.5px}
+  thead th.vsep{border-left:2px solid var(--line)}
+  thead tr.subhead th{background:var(--surface-2);font-size:10px;padding:6px 11px;color:var(--muted);border-bottom:1px solid var(--line)}
+  thead tr.subhead th.gstart{border-left:2px solid var(--line)}
+  thead tr.subhead th.num{text-align:right}
+
+  tbody td{padding:8px 11px;vertical-align:middle;font-size:12px;white-space:nowrap;border-bottom:1px solid var(--line-2)}
+  tbody tr:hover td{background:var(--surface-2)}
+  tbody tr.nl td{border-top:2px solid #d3dbe3}
+  tbody tr.is td{border-top:1.5px dashed #d9e0e7}
+  td.num{text-align:right;font-variant-numeric:tabular-nums}
+  td.gstart{border-left:2px solid var(--line-2)}
+  td.vsep{border-left:2px solid var(--line)}
+  .item-name{font-weight:600;color:var(--ink);font-size:12.5px;white-space:normal;max-width:210px}
+  .item-code{font-size:10.5px;color:var(--muted);letter-spacing:.3px}
+  .branch-pill{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;color:var(--ink-2)}
+  .branch-dot{width:7px;height:7px;border-radius:50%;background:var(--primary)}
+  .sub-mut{font-size:10.5px;color:var(--muted);margin-left:13px}
+  .sm{font-size:12px;color:var(--ink-2)}
+  .dt{font-size:11px;color:var(--muted)}
+  .no{font-size:11px;color:var(--ink-2)}
+  .no.empty,.dt.empty{color:#c6d0d9}
+  .qy{font-variant-numeric:tabular-nums;font-weight:600;color:var(--ink-2)}
+  .bal{font-weight:700;font-variant-numeric:tabular-nums}
+  .bal.open-b{color:var(--dead)} .bal.zero-b{color:var(--muted)}
+
+  .badge{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;padding:4px 9px;border-radius:20px;white-space:nowrap}
+  .badge .d{width:6px;height:6px;border-radius:50%}
+  .b-req{background:var(--req-w);color:#4a586b} .b-req .d{background:var(--req)}
+  .b-po{background:var(--po-w);color:#3a44a8} .b-po .d{background:var(--po)}
+  .b-transit{background:var(--transit-w);color:#8f5600} .b-transit .d{background:var(--transit)}
+  .b-recv{background:var(--recv-w);color:var(--primary-ink)} .b-recv .d{background:var(--recv)}
+  .b-bill{background:var(--bill-w);color:#245a95} .b-bill .d{background:var(--bill)}
+  .b-inv{background:var(--inv-w);color:#146138} .b-inv .d{background:var(--inv)}
+  .flag{display:inline-flex;align-items:center;gap:4px;font-size:10.5px;font-weight:600;padding:3px 7px;border-radius:6px;margin-left:5px}
+  .f-ret{background:var(--ret-w);color:#66399a}
+
+  .chips{display:flex;flex-wrap:wrap;gap:4px}
+  .chip{font-size:11px;background:var(--surface-2);border:1px solid var(--line);border-radius:6px;padding:2px 7px;color:var(--ink-2);white-space:nowrap}
+  .chip b{color:var(--ink);font-variant-numeric:tabular-nums}
+  #tbl.product-view tbody td{white-space:normal}
+  .empty-state{padding:48px;text-align:center;color:var(--muted)}
+  .foot-note{font-size:11.5px;color:var(--muted);margin-top:14px;text-align:center}
+
+  /* status / loading / error */
+  .banner{border-radius:var(--radius);padding:12px 15px;margin-bottom:14px;font-size:13px;display:flex;gap:10px;align-items:flex-start}
+  .banner.info{background:#EAF3F7;border:1px solid #CFE4EC;color:#0A5064}
+  .banner.warn{background:#FBF4E4;border:1px solid #F0E2BE;color:#7a5a00}
+  .banner.err{background:#FAE7E4;border:1px solid #F0C9C2;color:#8a271b}
+  .spinner{width:16px;height:16px;border:2px solid #cfe0e7;border-top-color:var(--primary);border-radius:50%;animation:spin .7s linear infinite;flex:none;margin-top:1px}
+  @keyframes spin{to{transform:rotate(360deg)}}
+
+  /* debug panel */
+  .debug{margin-top:18px;border:1px dashed #c3ccd6;border-radius:var(--radius);background:#fff}
+  .debug summary{cursor:pointer;padding:11px 15px;font-weight:600;font-size:12.5px;color:var(--ink-2)}
+  .debug .db-body{padding:0 15px 15px}
+  .db-rep{margin-bottom:16px}
+  .db-rep h4{font-size:12px;color:var(--primary-ink);margin-bottom:6px}
+  .db-keys{font-family:'JetBrains Mono',monospace;font-size:11px;background:var(--surface-2);border:1px solid var(--line);border-radius:6px;padding:9px 11px;white-space:pre-wrap;word-break:break-word;color:var(--ink-2)}
+  .db-mini{font-size:11px;color:var(--muted);margin:2px 0 6px}
+  .test-row{display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap}
+  .test-row input{font:inherit;font-size:13px;padding:7px 10px;border:1px solid var(--line);border-radius:7px;min-width:220px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="rpt-head">
+    <div>
+      <h1>Inter-Branch Stock Movement &mdash; Traceability</h1>
+      <div class="item-tag">
+        <span class="code mono" id="item-code-tag">—</span>
+        <span class="nm" id="item-name-tag">Loading item&hellip;</span>
+      </div>
+    </div>
+    <div class="head-actions">
+      <button class="btn" id="btn-refresh"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6"/></svg>Refresh</button>
+    </div>
+  </div>
+
+  <!-- status banner (loading / error / warnings) -->
+  <div id="status"></div>
+
+  <!-- Local test bar: only shows when NOT running inside Creator (no item_code param). -->
+  <div id="test-bar" style="display:none">
+    <div class="banner warn">
+      <div>
+        <b>Preview mode</b> — no <code>item_code</code> page parameter detected (you are not inside Creator, or the param wasn't passed).
+        <div class="test-row" style="margin-top:8px">
+          <input id="test-code" placeholder="Type an ITEM CODE to test, e.g. VT6060-IVG">
+          <button class="btn" id="test-go">Load</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="viewbar">
+    <div class="seg">
+      <button data-view="product" id="v-product" class="on">Product summary</button>
+      <button data-view="lines" id="v-lines">Request lines</button>
+    </div>
+    <div class="result-count" id="count"></div>
+  </div>
+
+  <div class="legend" id="legend" style="display:none">
+    <span><i class="solid2"></i> New request line</span>
+    <span><i class="dash"></i> Next invoice (same order)</span>
+    <span><i></i> Credit note against invoice</span>
+  </div>
+
+  <div class="table-card"><div class="table-scroll">
+    <table id="tbl" class="product-view"><thead id="thead"></thead><tbody id="tbody"></tbody></table>
+  </div></div>
+
+  <div class="foot-note">Live data &middot; Silvan Tiles / Zoho Creator. Filtered by item code passed from the page.</div>
+
+  <!-- ============ FIELD DISCOVERY / DEBUG ============ -->
+  <details class="debug" id="debug">
+    <summary>🔧 Field discovery &amp; debug — open this once to read the real field link names</summary>
+    <div class="db-body">
+      <p class="db-mini">For each report below, this shows the actual field keys returned by the Creator API for the current item code. Copy these back so the <code>FIELD</code> config can be locked to your exact link names. (Add <code>?debug=1</code> to force this even when data loads fine.)</p>
+      <div id="debug-out"></div>
+    </div>
+  </details>
+</div>
+
+<script>
+"use strict";
+
+/* =========================================================================
+   1) CONFIGURATION  — edit ONLY this block once you confirm link names.
+   Each report has:
+     report      : the report link name (as in the URL you gave me)
+     itemCode    : the field link name that holds the item code in THAT report
+     fields      : map of logical name -> actual field link name
+   Values marked  // TODO  are my best inference and should be verified via
+   the Field-discovery panel at the bottom of the page.
+   ========================================================================= */
+var APP_NAME = "silvan-tiles";   // application link name (from the app URL)
+
+var FIELD = {
+  itemMaster: {
+    report:  "API_ITEM_MASTER",
+    itemCode:"Item_Code",                 // confirmed from screenshot
+    fields:{
+      name:  "ITEM_NAME",                 // TODO verify link name (display "ITEM NAME")
+      unit:  "Unit"                       // TODO verify
+    }
+  },
+
+  salesOrder: {                           // the traceability spine
+    report:  "SALES_ORDERS_ITEMWISE",
+    itemCode:"ITEM_CODE",                 // TODO verify (screenshot showed no link name)
+    fields:{
+      name:        "ITEM_NAME",           // TODO
+      unit:        "UNIT",                // TODO
+      salesOrder:  "Sales_Order",         // TODO  (lookup -> carries SO no via .display_value)
+      materialReq: "Material_Request",    // TODO  (lookup)
+      salesman:    "Sales_Man",           // TODO
+      warehouse:   "WAREHOUSE",           // TODO  (used as "branch")
+      orderedQty:  "QTY",                 // TODO
+      reqQty:      "REQ_QUANTITY",        // TODO
+      remainingQty:"REMAINING_QUANTITY_NOS", // TODO
+      transitBal:  "Transit_Balance",     // TODO
+      receiveBal:  "Receive_Balance",     // TODO
+      billBal:     "Bill_Balance",        // TODO
+      dismissedQty:"Dismissed_Qty",       // TODO
+      dismissedDate:"Dismissed_Date"      // TODO
+    }
+  },
+
+  purchaseOrder: {
+    report:  "PURCHASE_ORDERS_ITEMWISE",
+    itemCode:"ITEMCODE",                  // TODO verify (display "ITEMCODE")
+    fields:{
+      purchaseOrder:"Purchase_Order",     // TODO (lookup -> PO no via .display_value)
+      mrLine:      "Material_Request_Line_item", // confirmed link name
+      orderedQty:  "REQ_QUANTITY"         // TODO
+    }
+  },
+
+  batchTransfer: {                        // inter-branch "transit" movement
+    report:  "All_Batch_Transfer_Line_Items",
+    // NOTE: this form has NO plain item-code text field. Item is the lookup "Item".
+    // So we filter by ITEM NAME (or by the item record id) instead of item code.
+    itemCode:null,
+    itemNameField:"Item",                 // lookup field link name (confirmed)
+    fields:{
+      request:     "Branch_Transfer_Request", // TODO (lookup)
+      transferQty: "TRANSFER_QTY",        // TODO
+      remQty:      "REM_QUANTITY_BO"      // TODO
+    }
+  },
+
+  invoice: {
+    report:  "All_Sales_Invoice_Line_Items",
+    itemCode:"ITEM_CODE",                 // confirmed from screenshot
+    fields:{
+      salesInvoice:"Sales_Invoice",       // TODO (lookup -> invoice no via .display_value)
+      qty:         "QTY"                  // TODO
+    }
+  },
+
+  creditNote: {
+    report:  "Credit_Note_Line_Items_Report",
+    itemCode:"ITEM_CODE",                 // confirmed from screenshot
+    fields:{
+      creditNote:  "Credit_Note",         // TODO (lookup -> CN no via .display_value)
+      qty:         "QTY"                  // TODO
+    }
+  }
+};
+
+var PAGE_SIZE = 200; // Creator max per page for getAllRecords
+
+/* =========================================================================
+   2) SMALL HELPERS
+   ========================================================================= */
+function $(id){ return document.getElementById(id); }
+
+function setStatus(kind, html){
+  if(!kind){ $("status").innerHTML=""; return; }
+  var icon = kind==="info" ? '<div class="spinner"></div>' : '';
+  $("status").innerHTML = '<div class="banner '+kind+'">'+icon+'<div>'+html+'</div></div>';
+}
+
+// Zoho lookup fields come back as {display_value, ID} OR sometimes as {zc_display_value}.
+function lv(v){
+  if(v==null) return "";
+  if(typeof v==="object"){ return v.display_value || v.zc_display_value || v.value || ""; }
+  return String(v);
+}
+function num(v){ var n=parseFloat(lv(v).toString().replace(/[^0-9.\-]/g,"")); return isNaN(n)?0:n; }
+function money(n){ return "₹"+(Number(n)||0).toLocaleString('en-IN'); }
+
+/* =========================================================================
+   3) DATA ACCESS  — fetch every matching record from a report (paged).
+   Uses the widget SDK: ZOHO.CREATOR.API.getAllRecords({...})
+   ========================================================================= */
+function fetchAll(reportName, criteria){
+  var out = [];
+  function grab(page){
+    var cfg = { appName: APP_NAME, reportName: reportName, page: page, pageSize: PAGE_SIZE };
+    if(criteria) cfg.criteria = criteria;
+    return ZOHO.CREATOR.API.getAllRecords(cfg).then(function(resp){
+      var data = (resp && resp.data) ? resp.data : [];
+      out = out.concat(data);
+      if(data.length === PAGE_SIZE) return grab(page+1); // more pages
+      return out;
+    }).catch(function(err){
+      // code 3100 / no records is not a real error — return what we have.
+      if(err && (err.code===3100 || err.code==="3100")) return out;
+      throw {report:reportName, err:err};
+    });
+  }
+  return grab(1);
+}
+
+function eqCriteria(field, val){
+  // string equals; escape double quotes
+  var safe = String(val).replace(/"/g,'\\"');
+  return '(' + field + ' == "' + safe + '")';
+}
+
+/* =========================================================================
+   4) LOAD everything for one item code, then transform + render.
+   ========================================================================= */
+var RAW = {};   // last raw responses, for the debug panel
+var STATE = { view:"product", itemCode:"", itemName:"", rows:[] };
+
+function loadItem(code){
+  STATE.itemCode = code;
+  $("item-code-tag").textContent = code || "—";
+  $("item-name-tag").textContent = "Loading…";
+  setStatus("info", "Fetching traceability for <b>"+code+"</b> across all reports…");
+
+  var jobs = [
+    fetchAll(FIELD.itemMaster.report,    eqCriteria(FIELD.itemMaster.itemCode, code)).then(function(d){RAW.itemMaster=d;return d;}),
+    fetchAll(FIELD.salesOrder.report,    eqCriteria(FIELD.salesOrder.itemCode, code)).then(function(d){RAW.salesOrder=d;return d;}),
+    fetchAll(FIELD.purchaseOrder.report, eqCriteria(FIELD.purchaseOrder.itemCode, code)).then(function(d){RAW.purchaseOrder=d;return d;}),
+    fetchAll(FIELD.invoice.report,       eqCriteria(FIELD.invoice.itemCode, code)).then(function(d){RAW.invoice=d;return d;}),
+    fetchAll(FIELD.creditNote.report,    eqCriteria(FIELD.creditNote.itemCode, code)).then(function(d){RAW.creditNote=d;return d;})
+  ];
+
+  // Batch transfer has no item-code field -> filter by item NAME once we know it,
+  // handled after item master resolves. For now fetch is deferred.
+  Promise.all(jobs).then(function(res){
+    var itemMaster = res[0], so = res[1], po = res[2], inv = res[3], cn = res[4];
+    STATE.itemName = itemMaster.length ? lv(itemMaster[0][FIELD.itemMaster.fields.name]) : (so.length? lv(so[0][FIELD.salesOrder.fields.name]) : code);
+    $("item-name-tag").textContent = STATE.itemName || code;
+
+    // now batch transfer, filtered by item name (best available key)
+    var btCrit = STATE.itemName ? eqCriteria(FIELD.batchTransfer.itemNameField+".display_value", STATE.itemName) : null;
+    fetchAll(FIELD.batchTransfer.report, btCrit).then(function(bt){RAW.batchTransfer=bt;}).catch(function(){RAW.batchTransfer=[];}).finally(function(){
+      transformAndRender({itemMaster:itemMaster, so:so, po:po, inv:inv, cn:cn, bt:RAW.batchTransfer||[]});
+      renderDebug();
+    });
+  }).catch(function(e){
+    console.error(e);
+    var rep = e && e.report ? e.report : "a report";
+    setStatus("err", "Couldn't load <b>"+rep+"</b>. This is almost always a wrong field link name in the <code>FIELD</code> config — open the <b>Field discovery</b> panel below to see the real keys. Raw error: <code>"+ (e && e.err ? JSON.stringify(e.err) : e) +"</code>");
+    renderDebug();
+  });
+}
+
+/* =========================================================================
+   5) TRANSFORM raw records -> the row shape the table renderers use.
+   One "request line" == one Sales Order line record.
+   ========================================================================= */
+function transformAndRender(D){
+  var F = FIELD;
+  // index PO by MR line (if link present) else keep a flat list for the item
+  var invoices = D.inv.map(function(r){
+    return { no: lv(r[F.invoice.fields.salesInvoice]), date:"", qty: num(r[F.invoice.fields.qty]), creditNotes:[] };
+  });
+  // attach credit notes: only item-code join available -> group all CNs of the item.
+  var creditNotes = D.cn.map(function(r){
+    return { no: lv(r[F.creditNote.fields.creditNote]), date:"", qty: num(r[F.creditNote.fields.qty]) };
+  });
+  // best-effort: attach each CN to the invoice with the same invoice ref if present,
+  // else list them all under the first invoice.
+  if(invoices.length){ creditNotes.forEach(function(c){ invoices[0].creditNotes.push(c); }); }
+
+  var rows = D.so.map(function(r, i){
+    var ordered = num(r[F.salesOrder.fields.orderedQty]) || num(r[F.salesOrder.fields.reqQty]);
+    var billBal = num(r[F.salesOrder.fields.billBal]);
+    return {
+      id: i+1,
+      name: lv(r[F.salesOrder.fields.name]) || STATE.itemName,
+      code: STATE.itemCode,
+      branch: lv(r[F.salesOrder.fields.warehouse]) || "—",
+      customer: lv(r[F.salesOrder.fields.salesOrder]),   // SO lookup display (often "SO-no · customer")
+      salesman: lv(r[F.salesOrder.fields.salesman]) || "—",
+      vendor:"—",
+      so:[ lv(r[F.salesOrder.fields.salesOrder]), "" ],
+      mr:[ lv(r[F.salesOrder.fields.materialReq]), "" ],
+      po:["",""],
+      transit:["","", ""],
+      grn:["",""],
+      bill:["",""],
+      ordered: ordered,
+      billQty: ordered - billBal,   // billed = ordered - bill balance
+      dismissed: num(r[F.salesOrder.fields.dismissedQty]),
+      rate:0, unit: lv(r[F.salesOrder.fields.unit]) || "box",
+      poGroup:null,
+      // invoices/credit notes are item-level (see note #3); show them on the first line only
+      invoices: i===0 ? invoices : []
+    };
+  });
+
+  // attach PO number to lines (item-level, first PO shown)
+  var poNo = D.po.length ? lv(D.po[0][F.purchaseOrder.fields.purchaseOrder]) : "";
+  var poDate = "";
+  if(poNo){ rows.forEach(function(row){ row.po=[poNo,poDate]; row.poGroup=poNo; }); }
+
+  // attach transit (batch transfer) qty summary to first line
+  var transitQty = D.bt.reduce(function(a,r){ return a+num(r[F.batchTransfer.fields.transferQty]); },0);
+  if(D.bt.length){ rows.forEach(function(row){ row.transit=[ lv(D.bt[0][F.batchTransfer.fields.request]), "", "moving"]; }); }
+
+  STATE.rows = rows;
+  setStatus(null);
+
+  // warn if nothing came back at all
+  if(!rows.length && !invoices.length){
+    setStatus("warn", "No records found for item code <b>"+STATE.itemCode+"</b> in any report. If you expected data, the item-code field link names in the config are probably off — check the <b>Field discovery</b> panel.");
+  }
+  render();
+}
+
+/* =========================================================================
+   6) RENDERERS  (adapted from the approved mockup)
+   ========================================================================= */
+var invTotal=function(r){return (r.invoices||[]).reduce(function(a,iv){return a+iv.qty;},0);};
+var retTotal=function(r){return (r.invoices||[]).reduce(function(a,iv){return a+iv.creditNotes.reduce(function(b,c){return b+c.qty;},0);},0);};
+
+function stageOf(r){
+  if((r.invoices||[]).length) return "Invoiced";
+  if(r.bill[0]) return "Billed";
+  if(r.grn[0]) return "Received";
+  if(r.transit[0]) return r.transit[2]==="received"?"Received":"In Transit";
+  if(r.po[0]) return "PO Raised";
+  return "Requested";
+}
+var badgeClass={"Requested":"b-req","PO Raised":"b-po","In Transit":"b-transit","Received":"b-recv","Billed":"b-bill","Invoiced":"b-inv"};
+
+function dnq(cell, qty, rs){
+  var r = rs>1?' rowspan="'+rs+'"':"";
+  if(!cell || !cell[0]) return '<td class="dt empty gstart"'+r+'>—</td><td class="no empty"'+r+'>—</td><td class="num"'+r+'><span class="qy" style="color:#c6d0d9">—</span></td>';
+  return '<td class="dt gstart"'+r+'>'+(cell[1]||"—")+'</td><td class="no mono"'+r+'>'+cell[0]+'</td><td class="num"'+r+'><span class="qy">'+qty+'</span></td>';
+}
+function invCells(iv, rs){
+  var r = rs>1?' rowspan="'+rs+'"':"";
+  if(!iv) return '<td class="dt empty gstart"'+r+'>—</td><td class="no empty"'+r+'>—</td><td class="num"'+r+'><span class="qy" style="color:#c6d0d9">—</span></td>';
+  return '<td class="dt gstart"'+r+'>'+(iv.date||"—")+'</td><td class="no mono"'+r+'>'+iv.no+'</td><td class="num"'+r+'><span class="qy">'+iv.qty+'</span></td>';
+}
+function cnCells(cn){
+  if(!cn) return '<td class="dt empty gstart">—</td><td class="no empty">—</td><td class="num"><span class="qy" style="color:#c6d0d9">—</span></td>';
+  return '<td class="dt gstart">'+(cn.date||"—")+'</td><td class="no mono">'+cn.no+'</td><td class="num"><span class="qy" style="color:var(--ret)">'+cn.qty+'</span></td>';
+}
+
+function renderLines(list){
+  var tbl=$('tbl'); tbl.className='lines-view';
+  $('thead').innerHTML=
+   '<tr>'+
+     '<th rowspan="2">Item</th>'+
+     '<th rowspan="2">Branch / Sales Order</th>'+
+     '<th rowspan="2">Salesman</th>'+
+     '<th colspan="3" class="grp">Sales Order</th>'+
+     '<th colspan="3" class="grp">Material Request</th>'+
+     '<th colspan="3" class="grp">Purchase Order</th>'+
+     '<th colspan="3" class="grp">Transit (Branch)</th>'+
+     '<th rowspan="2" class="num vsep">Balance</th>'+
+     '<th colspan="3" class="grp">Invoice</th>'+
+     '<th rowspan="2" class="num vsep">Dismissed</th>'+
+     '<th rowspan="2" class="num">Remaining</th>'+
+     '<th colspan="3" class="grp">Credit Note</th>'+
+     '<th rowspan="2" class="vsep">Status</th>'+
+   '</tr>'+
+   '<tr class="subhead">'+Array(6).fill('<th class="gstart">Date</th><th>No.</th><th class="num">Qty</th>').join('')+'</tr>';
+
+  var html="";
+  list.forEach(function(r,li){
+    var invs=r.invoices||[];
+    var bal=r.ordered - r.billQty;
+    var rem=r.ordered - invTotal(r) - r.dismissed;
+    var returns=retTotal(r);
+    var st=stageOf(r), bc=badgeClass[st];
+    var retFlag = returns>0?'<span class="flag f-ret">Return '+returns+'</span>':"";
+
+    var phys=[];
+    if(!invs.length){ phys.push({iv:null,invRS:1,invFirst:true,cn:null,invStart:false}); }
+    else invs.forEach(function(iv,ii){
+      var cns = iv.creditNotes.length?iv.creditNotes:[null];
+      cns.forEach(function(cn,ci){ phys.push({iv:iv,invRS:Math.max(1,iv.creditNotes.length),invFirst:ci===0,cn:cn,invStart:ci===0&&ii>0}); });
+    });
+    var T=phys.length, RS=' rowspan="'+T+'"';
+
+    phys.forEach(function(p,idx){
+      var cls=[]; if(idx===0 && li>0) cls.push('nl'); if(p.invStart) cls.push('is');
+      var tds="";
+      if(idx===0){
+        tds += '<td'+RS+'><div class="item-name">'+r.name+'</div><div class="item-code mono">'+r.code+'</div></td>'+
+          '<td'+RS+'><div class="branch-pill"><span class="branch-dot"></span>'+r.branch+'</div><div class="sub-mut">'+(r.customer||"")+'</div></td>'+
+          '<td'+RS+'><span class="sm">'+r.salesman+'</span></td>'+
+          dnq(r.so,r.ordered,T)+dnq(r.mr,r.ordered,T)+dnq(r.po,r.ordered,T)+dnq(r.transit,r.ordered,T)+
+          '<td class="num vsep"'+RS+'><span class="bal '+(bal>0?'open-b':'zero-b')+'">'+bal+'</span></td>';
+      }
+      if(p.invFirst) tds += invCells(p.iv, p.invRS);
+      if(idx===0){
+        tds += '<td class="num vsep"'+RS+'><span class="qy" style="'+(r.dismissed>0?'color:var(--dead);font-weight:700':'color:var(--muted)')+'">'+r.dismissed+'</span></td>'+
+          '<td class="num"'+RS+'><span class="bal '+(rem>0?'open-b':'zero-b')+'">'+rem+'</span></td>';
+      }
+      tds += cnCells(p.cn);
+      if(idx===0) tds += '<td class="vsep"'+RS+'><span class="badge '+bc+'"><span class="d"></span>'+st+'</span>'+retFlag+'</td>';
+      html += '<tr class="'+cls.join(' ')+'">'+tds+'</tr>';
+    });
+  });
+  $('tbody').innerHTML=html || '<tr><td><div class="empty-state">No request lines for this item.</div></td></tr>';
+}
+
+function renderProduct(list){
+  $('tbl').className='product-view';
+  $('thead').innerHTML='<tr>'+
+    '<th>Item</th><th>Salesman</th><th>Branch-wise demand</th>'+
+    '<th class="num">Total Req.</th><th class="num">Invoiced</th><th class="num">Dismissed</th>'+
+    '<th class="num">Remaining</th><th class="num">Credit Note</th><th class="num">Net sold</th></tr>';
+  if(!list.length){$('tbody').innerHTML='<tr><td colspan="9"><div class="empty-state">No records for this item.</div></td></tr>';return;}
+  var s=list[0];
+  var byBranch={}; list.forEach(function(r){byBranch[r.branch]=(byBranch[r.branch]||0)+r.ordered;});
+  var salesmen=Array.from(new Set(list.map(function(r){return r.salesman;})));
+  var tot=list.reduce(function(a,r){return a+r.ordered;},0), inv=list.reduce(function(a,r){return a+invTotal(r);},0);
+  var dis=list.reduce(function(a,r){return a+r.dismissed;},0), ret=list.reduce(function(a,r){return a+retTotal(r);},0);
+  var rem=tot-inv-dis;
+  var demand=Object.keys(byBranch).map(function(b){return '<span class="chip">'+b+' <b>'+byBranch[b]+'</b></span>';}).join("");
+  var sm=salesmen.map(function(m){return '<span class="chip">'+m+'</span>';}).join("");
+  $('tbody').innerHTML='<tr>'+
+    '<td><div class="item-name">'+STATE.itemName+'</div><div class="item-code mono">'+STATE.itemCode+'</div></td>'+
+    '<td><div class="chips">'+sm+'</div></td>'+
+    '<td><div class="chips">'+demand+'</div></td>'+
+    '<td class="num"><b>'+tot+'</b></td>'+
+    '<td class="num">'+inv+'</td>'+
+    '<td class="num">'+(dis>0?'<span class="flag" style="background:var(--dead-w);color:#a5271b">'+dis+'</span>':'—')+'</td>'+
+    '<td class="num">'+(rem>0?'<span class="bal open-b">'+rem+'</span>':'0')+'</td>'+
+    '<td class="num">'+(ret>0?'<span class="flag f-ret">'+ret+'</span>':'—')+'</td>'+
+    '<td class="num"><b style="color:var(--inv)">'+(inv-ret)+'</b></td></tr>';
+}
+
+function render(){
+  var list=STATE.rows;
+  $('legend').style.display = STATE.view==="lines" ? "flex":"none";
+  $('count').innerHTML = STATE.view==="lines"
+    ? '<b>'+list.length+'</b> request line'+(list.length!==1?'s':'')
+    : '<b>1</b> product';
+  if(STATE.view==="lines") renderLines(list); else renderProduct(list);
+}
+
+/* =========================================================================
+   7) DEBUG / FIELD DISCOVERY panel
+   ========================================================================= */
+function renderDebug(){
+  var order=[["itemMaster","Item Master"],["salesOrder","Sales Order item-wise"],["purchaseOrder","PO item-wise"],["batchTransfer","Batch Transfer"],["invoice","Sales Invoice"],["creditNote","Credit Note"]];
+  var out="";
+  order.forEach(function(pair){
+    var key=pair[0], label=pair[1], recs=RAW[key]||[];
+    out+='<div class="db-rep"><h4>'+label+' — report "'+FIELD[key].report+'" — '+recs.length+' record(s)</h4>';
+    if(recs.length){
+      out+='<div class="db-mini">Field keys returned:</div><div class="db-keys">'+Object.keys(recs[0]).join("\n")+'</div>';
+      out+='<div class="db-mini" style="margin-top:6px">First record (values):</div><div class="db-keys">'+escapeHtml(JSON.stringify(recs[0],null,1))+'</div>';
+    } else {
+      out+='<div class="db-mini">No records returned (either none for this item, or the item-code field link name for this report is wrong).</div>';
+    }
+    out+='</div>';
+  });
+  $('debug-out').innerHTML=out;
+}
+function escapeHtml(s){return String(s).replace(/[&<>]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c];});}
+
+/* =========================================================================
+   8) BOOTSTRAP  — init SDK, read the item_code page parameter, load.
+   ========================================================================= */
+function getItemCodeParam(params){
+  if(!params) return "";
+  // accept several spellings the page param might use
+  return params.item_code || params.ITEM_CODE || params.itemcode || params.Item_Code || params.code || "";
+}
+
+function boot(){
+  // view toggle
+  document.querySelectorAll('.seg button').forEach(function(b){
+    b.addEventListener('click',function(){
+      document.querySelectorAll('.seg button').forEach(function(x){x.classList.remove('on');});
+      b.classList.add('on'); STATE.view=b.dataset.view; render();
+    });
+  });
+  $('btn-refresh').addEventListener('click',function(){ if(STATE.itemCode) loadItem(STATE.itemCode); });
+  $('test-go').addEventListener('click',function(){ var c=$('test-code').value.trim(); if(c) loadItem(c); });
+  $('test-code').addEventListener('keydown',function(e){ if(e.key==="Enter"){ var c=e.target.value.trim(); if(c) loadItem(c);} });
+
+  if(location.search.indexOf("debug=1")>-1){ $('debug').open=true; }
+
+  if(typeof ZOHO==="undefined" || !ZOHO.CREATOR){
+    setStatus("warn","Zoho Creator SDK not loaded (you're viewing this outside Creator). Use the preview box to test with a sample item code.");
+    $('test-bar').style.display="block";
+    return;
+  }
+
+  ZOHO.CREATOR.init().then(function(){
+    var params = (ZOHO.CREATOR.UTIL && ZOHO.CREATOR.UTIL.getQueryParams) ? ZOHO.CREATOR.UTIL.getQueryParams() : {};
+    var code = getItemCodeParam(params);
+    if(code){ loadItem(code); }
+    else {
+      setStatus("warn","No <b>item_code</b> parameter received from the page. Pass it as a widget page parameter named <code>item_code</code>.");
+      $('test-bar').style.display="block";
+    }
+  }).catch(function(e){
+    setStatus("err","ZOHO.CREATOR.init() failed: <code>"+JSON.stringify(e)+"</code>");
+    $('test-bar').style.display="block";
+  });
+}
+
+document.addEventListener('DOMContentLoaded', boot);
+</script>
+</body>
+</html>
