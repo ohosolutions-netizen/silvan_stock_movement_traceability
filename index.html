@@ -196,7 +196,7 @@
 "use strict";
 
 /* Build marker — bump on each deploy so we can confirm the loaded version. */
-var BUILD = "2026-09-15-g";
+var BUILD = "2026-09-15-h";
 
 /* =========================================================================
    1) CONFIGURATION  — edit ONLY this block once you confirm link names.
@@ -212,72 +212,70 @@ var APP_NAME = "silvan-tiles";   // application link name (from the app URL)
 var FIELD = {
   itemMaster: {
     report:  "API_ITEM_MASTER",
-    itemCode:"Item_Code",                 // confirmed from screenshot
+    itemCode:"Item_Code",                 // confirmed
     fields:{
-      name:  "ITEM_NAME",                 // TODO verify link name (display "ITEM NAME")
-      unit:  "Unit"                       // TODO verify
+      name:  "Item_Name",                 // confirmed (has a leading space in data)
+      unit:  "Unit"                       // confirmed (lookup, .zc_display_value)
     }
   },
 
   salesOrder: {                           // the traceability spine
     report:  "SALES_ORDERS_ITEMWISE",
-    itemCode:"ITEM_CODE",                 // TODO verify (screenshot showed no link name)
+    itemCode:"ITEM_CODE",                 // confirmed: criteria on the form field works
     fields:{
-      name:        "ITEM_NAME",           // TODO
-      unit:        "UNIT",                // TODO
-      salesOrder:  "Sales_Order",         // TODO  (lookup -> carries SO no via .display_value)
-      materialReq: "Material_Request",    // TODO  (lookup)
-      salesman:    "Sales_Man",           // TODO
-      warehouse:   "WAREHOUSE",           // TODO  (used as "branch")
-      orderedQty:  "QTY",                 // TODO
-      reqQty:      "REQ_QUANTITY",        // TODO
-      remainingQty:"REMAINING_QUANTITY_NOS", // TODO
-      transitBal:  "Transit_Balance",     // TODO
-      receiveBal:  "Receive_Balance",     // TODO
-      billBal:     "Bill_Balance",        // TODO
-      dismissedQty:"Dismissed_Qty",       // TODO
-      dismissedDate:"Dismissed_Date"      // TODO
+      name:      "ITEM_NAME",             // lookup -> zc_display_value "name - code"
+      unit:      "UNIT",
+      orderNo:   "Lookup.Order_No",       // "SO/1115"
+      orderDate: "Lookup.Date_field",     // "14-Sep-2026"
+      customer:  "Lookup.Customer",       // lookup -> zc_display_value
+      salesman:  "Lookup.Sales_Man",      // lookup -> zc_display_value
+      orderedQty:"QTY"                    // "2.000"
+      // NOTE: this report has NO Material Request / branch / dismissed / bill columns.
     }
   },
 
   purchaseOrder: {
     report:  "PURCHASE_ORDERS_ITEMWISE",
-    itemCode:"ITEMCODE",                  // TODO verify (display "ITEMCODE")
+    itemCode:"ITEMCODE",                  // confirmed
     fields:{
-      purchaseOrder:"Purchase_Order",     // TODO (lookup -> PO no via .display_value)
-      mrLine:      "Material_Request_Line_item", // confirmed link name
-      orderedQty:  "REQ_QUANTITY"         // TODO
+      poNo:  "Purchase_Order",            // lookup -> "PO/356"
+      poDate:"Purchase_Order.Date_field", // "14-Sep-2026"
+      qty:   "QTY"                        // "10.00"
     }
   },
 
   batchTransfer: {                        // inter-branch "transit" movement
     report:  "All_Batch_Transfer_Line_Items",
-    // NOTE: this form has NO plain item-code text field. Item is the lookup "Item".
-    // So we filter by ITEM NAME (or by the item record id) instead of item code.
-    itemCode:null,
-    itemNameField:"Item",                 // lookup field link name (confirmed)
+    // The item is the lookup "Item" (no plain item-code column). Filter by the
+    // item master record ID (most reliable), computed at load time.
+    itemLookupField:"Item",
     fields:{
-      request:     "Branch_Transfer_Request", // TODO (lookup)
-      transferQty: "TRANSFER_QTY",        // TODO
-      remQty:      "REM_QUANTITY_BO"      // TODO
+      request:     "Branch_Transfer_Request",
+      transferQty: "TRANSFER_QTY"
     }
   },
 
   invoice: {
     report:  "All_Sales_Invoice_Line_Items",
-    itemCode:"ITEM_CODE",                 // confirmed from screenshot
+    itemCode:"ITEM_CODE",                 // confirmed
     fields:{
-      salesInvoice:"Sales_Invoice",       // TODO (lookup -> invoice no via .display_value)
-      qty:         "QTY"                  // TODO
+      // The report currently exposes only the Sales_Invoice lookup (display = record ID)
+      // and QTY. Add "Invoice Number" + "Date" columns to the report to fill these:
+      invoiceNo:    "Sales_Invoice.Invoice_Number", // add as a report column (optional)
+      invoiceNoLk:  "Sales_Invoice",                 // fallback (currently a record ID)
+      invoiceDate:  "Sales_Invoice.Date_field",      // add as a report column (optional)
+      qty:          "QTY"
     }
   },
 
   creditNote: {
     report:  "Credit_Note_Line_Items_Report",
-    itemCode:"ITEM_CODE",                 // confirmed from screenshot
+    itemCode:"ITEM_CODE",                 // confirmed
     fields:{
-      creditNote:  "Credit_Note",         // TODO (lookup -> CN no via .display_value)
-      qty:         "QTY"                  // TODO
+      cnNo:   "Credit_Note.CreditNote_Number", // add as a report column (optional)
+      cnNoLk: "Credit_Note",                    // fallback (currently empty {})
+      cnDate: "Credit_Note.Date_field",         // add as a report column (optional)
+      qty:    "QTY"
     }
   }
 };
@@ -318,6 +316,16 @@ function lv(v){
 }
 function num(v){ var n=parseFloat(lv(v).toString().replace(/[^0-9.\-]/g,"")); return isNaN(n)?0:n; }
 function money(n){ return "₹"+(Number(n)||0).toLocaleString('en-IN'); }
+
+// A document number: prefer a real report column (subKey), else the lookup's
+// display value — but suppress bare 15+ digit record IDs (they aren't useful).
+function docNo(r, subKey, lookupKey){
+  var s = subKey ? lv(r[subKey]) : "";
+  if(s) return s;
+  var d = lookupKey ? lv(r[lookupKey]) : "";
+  if(/^\d{15,}$/.test(d)) return "";
+  return d;
+}
 
 /* =========================================================================
    3) DATA ACCESS  — fetch every matching record from a report (paged).
@@ -434,7 +442,7 @@ function loadItem(code){
 
   Promise.all(jobs).then(function(){
     var itemMaster=results.itemMaster||[], so=results.salesOrder||[], po=results.purchaseOrder||[], inv=results.invoice||[], cn=results.creditNote||[];
-    STATE.itemName = itemMaster.length ? lv(itemMaster[0][FIELD.itemMaster.fields.name]) : (so.length? lv(so[0][FIELD.salesOrder.fields.name]) : code);
+    STATE.itemName = (( itemMaster.length ? lv(itemMaster[0][FIELD.itemMaster.fields.name]) : (so.length? lv(so[0][FIELD.salesOrder.fields.name]) : code) )+"").trim();
     $("item-name-tag").textContent = STATE.itemName || code;
 
     // Render the essential data IMMEDIATELY — do not block on the optional
@@ -443,10 +451,12 @@ function loadItem(code){
     transformAndRender({itemMaster:itemMaster, so:so, po:po, inv:inv, cn:cn, bt:RAW.batchTransfer});
     renderDebug();
 
-    // Batch transfer is best-effort: it has no item-code field, so we filter by
-    // item NAME. Fetch it in the background and re-render if it returns rows.
+    // Batch transfer is best-effort: it has no item-code column (item is the
+    // lookup "Item"), so filter by the item master record ID. Fetch in the
+    // background and re-render if it returns rows.
     PROG.batchTransfer="…";
-    var btCrit = STATE.itemName ? eqCriteria(FIELD.batchTransfer.itemNameField+".display_value", STATE.itemName) : null;
+    var itemId = itemMaster.length ? lv(itemMaster[0].ID) : "";
+    var btCrit = itemId ? '('+FIELD.batchTransfer.itemLookupField+' == "'+itemId+'")' : null;
     fetchAll(FIELD.batchTransfer.report, btCrit).then(
       function(bt){ RAW.batchTransfer=bt; PROG.batchTransfer="✓ "+bt.length+" record(s)"; },
       function(e){ RAW.batchTransfer=[]; PROG.batchTransfer="✗ "+((e&&(e.message||e.code))||"error"); console.error("[batchTransfer]", e); }
@@ -462,54 +472,64 @@ function loadItem(code){
    One "request line" == one Sales Order line record.
    ========================================================================= */
 function transformAndRender(D){
-  var F = FIELD;
-  // index PO by MR line (if link present) else keep a flat list for the item
+  var F = FIELD, S = F.salesOrder.fields;
+
+  // Invoices for this item (item-code join). The report exposes only a QTY and a
+  // Sales_Invoice lookup (whose display is a record ID) — docNo() shows a real
+  // number if the report has an Invoice Number column, else nothing useful.
   var invoices = D.inv.map(function(r){
-    return { no: lv(r[F.invoice.fields.salesInvoice]), date:"", qty: num(r[F.invoice.fields.qty]), creditNotes:[] };
+    return {
+      no:   docNo(r, F.invoice.fields.invoiceNo, F.invoice.fields.invoiceNoLk),
+      date: lv(r[F.invoice.fields.invoiceDate]),
+      qty:  num(r[F.invoice.fields.qty]),
+      creditNotes:[]
+    };
   });
-  // attach credit notes: only item-code join available -> group all CNs of the item.
   var creditNotes = D.cn.map(function(r){
-    return { no: lv(r[F.creditNote.fields.creditNote]), date:"", qty: num(r[F.creditNote.fields.qty]) };
+    return {
+      no:   docNo(r, F.creditNote.fields.cnNo, F.creditNote.fields.cnNoLk),
+      date: lv(r[F.creditNote.fields.cnDate]),
+      qty:  num(r[F.creditNote.fields.qty])
+    };
   });
-  // best-effort: attach each CN to the invoice with the same invoice ref if present,
-  // else list them all under the first invoice.
+  // Item-code join can't tie a CN to a specific invoice, so group all under the first.
   if(invoices.length){ creditNotes.forEach(function(c){ invoices[0].creditNotes.push(c); }); }
 
+  // Item-level summaries (first PO / first branch-transfer shown on every line).
+  var poNo   = D.po.length ? lv(D.po[0][F.purchaseOrder.fields.poNo])   : "";
+  var poDate = D.po.length ? lv(D.po[0][F.purchaseOrder.fields.poDate]) : "";
+  var poQty  = D.po.reduce(function(a,r){ return a+num(r[F.purchaseOrder.fields.qty]); },0);
+  var btNo   = D.bt.length ? lv(D.bt[0][F.batchTransfer.fields.request]) : "";
+  var btQty  = D.bt.reduce(function(a,r){ return a+num(r[F.batchTransfer.fields.transferQty]); },0);
+
   var rows = D.so.map(function(r, i){
-    var ordered = num(r[F.salesOrder.fields.orderedQty]) || num(r[F.salesOrder.fields.reqQty]);
-    var billBal = num(r[F.salesOrder.fields.billBal]);
+    var ordered = num(r[S.orderedQty]);
     return {
       id: i+1,
-      name: lv(r[F.salesOrder.fields.name]) || STATE.itemName,
+      name: ((STATE.itemName || lv(r[S.name]) || "")+"").trim(),
       code: STATE.itemCode,
-      branch: lv(r[F.salesOrder.fields.warehouse]) || "—",
-      customer: lv(r[F.salesOrder.fields.salesOrder]),   // SO lookup display (often "SO-no · customer")
-      salesman: lv(r[F.salesOrder.fields.salesman]) || "—",
+      branch: lv(r[S.customer]) || "—",   // no branch column in report; show customer
+      customer: "",                        // customer already used as the main line
+      salesman: lv(r[S.salesman]) || "—",
       vendor:"—",
-      so:[ lv(r[F.salesOrder.fields.salesOrder]), "" ],
-      mr:[ lv(r[F.salesOrder.fields.materialReq]), "" ],
-      po:["",""],
-      transit:["","", ""],
+      so:[ lv(r[S.orderNo]), lv(r[S.orderDate]) ],
+      mr:["",""],                          // Material Request not present in these reports
+      po: poNo ? [poNo, poDate] : ["",""],
+      transit: btNo ? [btNo, "", "moving"] : ["","",""],
       grn:["",""],
       bill:["",""],
       ordered: ordered,
-      billQty: ordered - billBal,   // billed = ordered - bill balance
-      dismissed: num(r[F.salesOrder.fields.dismissedQty]),
-      rate:0, unit: lv(r[F.salesOrder.fields.unit]) || "box",
-      poGroup:null,
-      // invoices/credit notes are item-level (see note #3); show them on the first line only
+      billQty: 0,                          // no bill column in report
+      dismissed: 0,                        // no dismissed column in report
+      rate: num(r["RATE"]),
+      unit: lv(r[S.unit]) || "box",
+      poGroup: poNo || null,
+      poQty: poQty,
+      transitQty: btQty,
+      // invoices/credit notes are item-level; show them on the first line only
       invoices: i===0 ? invoices : []
     };
   });
-
-  // attach PO number to lines (item-level, first PO shown)
-  var poNo = D.po.length ? lv(D.po[0][F.purchaseOrder.fields.purchaseOrder]) : "";
-  var poDate = "";
-  if(poNo){ rows.forEach(function(row){ row.po=[poNo,poDate]; row.poGroup=poNo; }); }
-
-  // attach transit (batch transfer) qty summary to first line
-  var transitQty = D.bt.reduce(function(a,r){ return a+num(r[F.batchTransfer.fields.transferQty]); },0);
-  if(D.bt.length){ rows.forEach(function(row){ row.transit=[ lv(D.bt[0][F.batchTransfer.fields.request]), "", "moving"]; }); }
 
   STATE.rows = rows;
 
@@ -601,7 +621,7 @@ function renderLines(list){
         tds += '<td'+RS+'><div class="item-name">'+r.name+'</div><div class="item-code mono">'+r.code+'</div></td>'+
           '<td'+RS+'><div class="branch-pill"><span class="branch-dot"></span>'+r.branch+'</div><div class="sub-mut">'+(r.customer||"")+'</div></td>'+
           '<td'+RS+'><span class="sm">'+r.salesman+'</span></td>'+
-          dnq(r.so,r.ordered,T)+dnq(r.mr,r.ordered,T)+dnq(r.po,r.ordered,T)+dnq(r.transit,r.ordered,T)+
+          dnq(r.so,r.ordered,T)+dnq(r.mr,r.ordered,T)+dnq(r.po,r.poQty,T)+dnq(r.transit,r.transitQty,T)+
           '<td class="num vsep"'+RS+'><span class="bal '+(bal>0?'open-b':'zero-b')+'">'+bal+'</span></td>';
       }
       if(p.invFirst) tds += invCells(p.iv, p.invRS);
