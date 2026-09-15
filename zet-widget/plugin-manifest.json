@@ -1,0 +1,21 @@
+{
+	"service": "CREATOR",
+	"cspDomains": {
+		"connect-src": [],
+		"child-src": [],
+		"script-src": [],
+		"style-src": ["https://fonts.googleapis.com"],
+		"img-src": [],
+		"font-src": ["https://fonts.gstatic.com"],
+		"media-src": [],
+		"frame-src": []
+	},
+	"whiteListedDomains": [],
+	"modules": {
+		"widgets": [
+			{
+				"location": "/widget.html"
+			}
+		]
+	}
+}
