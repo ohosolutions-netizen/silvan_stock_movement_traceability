@@ -196,7 +196,7 @@
 "use strict";
 
 /* Build marker — bump on each deploy so we can confirm the loaded version. */
-var BUILD = "2026-09-15-e";
+var BUILD = "2026-09-15-f";
 
 /* =========================================================================
    1) CONFIGURATION  — edit ONLY this block once you confirm link names.
@@ -724,19 +724,29 @@ function boot(){
   function done(fn){ if(settled) return; settled = true; fn(); }
 
   function proceed(){
-    // Data API is available — read the page param and load. (init may or may not
-    // have been needed, depending on the SDK shape Creator injected.)
+    // Data API is available. getQueryParams() may return an object OR a Promise
+    // depending on the SDK build — handle both, then merge URL fallbacks.
     var C = ZOHO.CREATOR;
-    var params = collectParams(C);
-    var code = getItemCodeParam(params);
-    if(code){ loadItem(code); }
-    else {
+    var gotSdk = function(sdkParams){
+      var merged = {};
+      try{ Object.assign(merged, sdkParams||{}); }catch(_){}
+      try{ Object.assign(merged, parseParamString(window.location.search)); }catch(_){}
+      try{ Object.assign(merged, parseParamString(window.location.hash)); }catch(_){}
+      var code = getItemCodeParam(merged);
+      if(code){ loadItem(code); return; }
       setStatus("warn",
-        "SDK ready (build "+BUILD+"), but no <b>item_code</b> reached the widget. In Creator, edit the page &rarr; the Widget component &rarr; add a parameter named <code>item_code</code> whose value is the page's item_code. (A value in the page URL alone is not passed automatically.)<br>"+
-        "<span style='opacity:.75'>merged params: <code>"+escapeHtml(JSON.stringify(params))+"</code><br>"+
-        "sources: <code>"+escapeHtml(JSON.stringify(collectParams._notes||{}))+"</code></span>");
+        "SDK ready (build "+BUILD+"), but no <b>item_code</b> reached the widget. Declare <code>item_code</code> as a <b>page parameter</b> on the Stock_Traceability page (Page settings &rarr; Parameters), then open the page with <code>?item_code=&lt;code&gt;</code>.<br>"+
+        "<span style='opacity:.75'>sdk params: <code>"+escapeHtml(JSON.stringify(sdkParams||{}))+"</code> · "+
+        "merged: <code>"+escapeHtml(JSON.stringify(merged))+"</code></span>");
       $('test-bar').style.display="block";
-    }
+    };
+    try{
+      if(C.UTIL && typeof C.UTIL.getQueryParams==="function"){
+        var r = C.UTIL.getQueryParams();
+        if(r && typeof r.then==="function"){ r.then(function(p){ gotSdk(p||{}); }, function(){ gotSdk({}); }); }
+        else { gotSdk(r||{}); }
+      } else { gotSdk({}); }
+    }catch(_){ gotSdk({}); }
   }
 
   function giveUp(reason){
