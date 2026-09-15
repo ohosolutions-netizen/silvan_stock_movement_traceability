@@ -196,7 +196,7 @@
 "use strict";
 
 /* Build marker — bump on each deploy so we can confirm the loaded version. */
-var BUILD = "2026-09-15-b";
+var BUILD = "2026-09-15-c";
 
 /* =========================================================================
    1) CONFIGURATION  — edit ONLY this block once you confirm link names.
@@ -288,6 +288,21 @@ var PAGE_SIZE = 200; // Creator max per page for getAllRecords
    2) SMALL HELPERS
    ========================================================================= */
 function $(id){ return document.getElementById(id); }
+
+// Errors are often Error objects (JSON.stringify -> "{}") — pull real detail out.
+function errToStr(e){
+  if(e==null) return String(e);
+  if(typeof e==="string") return e;
+  var parts=[];
+  if(e.message) parts.push("message="+e.message);
+  if(e.code!=null) parts.push("code="+e.code);
+  if(e.name) parts.push("name="+e.name);
+  if(e.status!=null) parts.push("status="+e.status);
+  if(e.description) parts.push("description="+e.description);
+  try{ var j=JSON.stringify(e); if(j && j!=="{}") parts.push("json="+j); }catch(_){}
+  if(!parts.length){ try{ parts.push(String(e)); }catch(_){ parts.push("(unserializable error)"); } }
+  return parts.join(" · ");
+}
 
 function setStatus(kind, html){
   if(!kind){ $("status").innerHTML=""; return; }
@@ -715,7 +730,14 @@ function boot(){
   }
   function afterFail(e){
     if(settled) return; settled = true; clearTimeout(watchdog);
-    setStatus("err","ZOHO.CREATOR.init() failed: <code>"+escapeHtml(JSON.stringify(e))+"</code> (build "+BUILD+")");
+    console.error("ZOHO.CREATOR.init() rejected with:", e);
+    var info = sdkInfo();
+    setStatus("err",
+      "<b>ZOHO.CREATOR.init() failed.</b> <code>"+escapeHtml(errToStr(e))+"</code><br>"+
+      "This means the SDK could not establish a Creator session — the usual cause is that this is running as an "+
+      "<b>external URL embed (Vercel) inside the page</b> rather than an <b>uploaded ZET widget</b>. "+
+      "Open the browser Console for the full error object.<br>"+
+      "<span style='opacity:.75'>build "+BUILD+" · ZOHO.CREATOR keys: "+escapeHtml((info.keys||[]).join(", "))+"</span>");
     $('test-bar').style.display="block";
   }
 
