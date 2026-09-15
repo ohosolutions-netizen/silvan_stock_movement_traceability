@@ -196,7 +196,7 @@
 "use strict";
 
 /* Build marker — bump on each deploy so we can confirm the loaded version. */
-var BUILD = "2026-09-15-d";
+var BUILD = "2026-09-15-e";
 
 /* =========================================================================
    1) CONFIGURATION  — edit ONLY this block once you confirm link names.
@@ -679,6 +679,30 @@ function getItemCodeParam(params){
   return params.item_code || params.ITEM_CODE || params.itemcode || params.Item_Code || params.code || "";
 }
 
+// Parse "a=1&b=2" or "…?a=1&b=2" or "#Page:X?a=1" into an object.
+function parseParamString(str){
+  var out={}; if(!str) return out;
+  var qi = str.indexOf('?'); if(qi>-1) str = str.slice(qi+1);
+  str = str.replace(/^[#&]/,'');
+  str.split('&').forEach(function(pair){
+    if(!pair) return; var i=pair.indexOf('='); var k=i>-1?pair.slice(0,i):pair; var v=i>-1?pair.slice(i+1):'';
+    try{ out[decodeURIComponent(k)]=decodeURIComponent(v); }catch(_){ out[k]=v; }
+  });
+  return out;
+}
+
+// Merge every place a param might arrive: the widget SDK, the iframe's own
+// query/hash, and the referrer (parent page URL).
+function collectParams(C){
+  var merged={}, notes={};
+  try{ if(C && C.UTIL && typeof C.UTIL.getQueryParams==="function"){ var q=C.UTIL.getQueryParams()||{}; Object.assign(merged,q); notes.sdk=q; } }catch(_){}
+  try{ Object.assign(merged, parseParamString(window.location.search)); notes.search=window.location.search; }catch(_){}
+  try{ Object.assign(merged, parseParamString(window.location.hash)); notes.hash=window.location.hash; }catch(_){}
+  try{ if(document.referrer){ notes.referrer=document.referrer; Object.assign(merged, parseParamString(document.referrer)); } }catch(_){}
+  collectParams._notes = notes;
+  return merged;
+}
+
 function boot(){
   var bt=$('build-tag'); if(bt) bt.textContent="build "+BUILD;
   // view toggle
@@ -703,11 +727,14 @@ function boot(){
     // Data API is available — read the page param and load. (init may or may not
     // have been needed, depending on the SDK shape Creator injected.)
     var C = ZOHO.CREATOR;
-    var params = (C.UTIL && typeof C.UTIL.getQueryParams==="function") ? C.UTIL.getQueryParams() : {};
+    var params = collectParams(C);
     var code = getItemCodeParam(params);
     if(code){ loadItem(code); }
     else {
-      setStatus("warn","SDK ready (build "+BUILD+"), but no <b>item_code</b> parameter was received. Available params: <code>"+escapeHtml(JSON.stringify(params))+"</code>. Pass a page parameter named <code>item_code</code>.");
+      setStatus("warn",
+        "SDK ready (build "+BUILD+"), but no <b>item_code</b> reached the widget. In Creator, edit the page &rarr; the Widget component &rarr; add a parameter named <code>item_code</code> whose value is the page's item_code. (A value in the page URL alone is not passed automatically.)<br>"+
+        "<span style='opacity:.75'>merged params: <code>"+escapeHtml(JSON.stringify(params))+"</code><br>"+
+        "sources: <code>"+escapeHtml(JSON.stringify(collectParams._notes||{}))+"</code></span>");
       $('test-bar').style.display="block";
     }
   }
