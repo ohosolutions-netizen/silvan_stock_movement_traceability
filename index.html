@@ -11,7 +11,7 @@
 <!-- (.com / .eu / .com.au etc). The widget SDK auto-detects the    -->
 <!-- API host after init(), so this loader host is not critical.    -->
 <!-- ============================================================= -->
-<script src="https://js.zohostatic.com/creator/widgets/version/2.0/widgetsdk-min.js"></script>
+<script src="https://js.zohostatic.in/creator/widgets/version/2.0/widgetsdk-min.js"></script>
 
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -196,7 +196,7 @@
 "use strict";
 
 /* Build marker — bump on each deploy so we can confirm the loaded version. */
-var BUILD = "2026-09-15-c";
+var BUILD = "2026-09-15-d";
 
 /* =========================================================================
    1) CONFIGURATION  — edit ONLY this block once you confirm link names.
@@ -694,60 +694,67 @@ function boot(){
 
   if(location.search.indexOf("debug=1")>-1){ $('debug').open=true; }
 
-  if(typeof ZOHO==="undefined" || !ZOHO.CREATOR){
-    setStatus("warn","Zoho Creator SDK not loaded (you're viewing this outside Creator). Use the preview box to test with a sample item code.");
-    $('test-bar').style.display="block";
-    return;
-  }
+  setStatus("info","Loading Creator SDK… <span style='opacity:.7'>(build "+BUILD+")</span>");
 
-  setStatus("info","Initializing Creator SDK… <span style='opacity:.7'>(build "+BUILD+")</span>");
-
-  // Independent watchdog: fires even if init() throws synchronously or the
-  // timeout promise never settles. Guarantees we never sit on "Initializing".
   var settled = false;
-  var watchdog = setTimeout(function(){
-    if(settled) return;
-    settled = true;
-    var info = sdkInfo();
-    setStatus("err",
-      "<b>init() did not resolve within 18s.</b> The SDK loaded but never connected to a Creator session.<br>"+
-      "Most likely: the widget is still embedded as an <b>external URL (Vercel) in the page</b>, not uploaded as a ZET widget. "+
-      "If you already uploaded it, then the page component wasn't swapped to the Widget.<br>"+
-      "<span style='opacity:.75'>build "+BUILD+" · ZOHO.CREATOR keys: "+escapeHtml((info.keys||[]).join(", "))+
-      " · data method: "+(info.apiGetAll?"API.getAllRecords":(info.dataGet?"DATA.getRecords":"none"))+"</span>");
-    $('test-bar').style.display="block";
-  }, 18000);
+  function done(fn){ if(settled) return; settled = true; fn(); }
 
-  function afterInit(){
-    if(settled) return; settled = true; clearTimeout(watchdog);
-    var params = (ZOHO.CREATOR.UTIL && ZOHO.CREATOR.UTIL.getQueryParams) ? ZOHO.CREATOR.UTIL.getQueryParams() : {};
+  function proceed(){
+    // Data API is available — read the page param and load. (init may or may not
+    // have been needed, depending on the SDK shape Creator injected.)
+    var C = ZOHO.CREATOR;
+    var params = (C.UTIL && typeof C.UTIL.getQueryParams==="function") ? C.UTIL.getQueryParams() : {};
     var code = getItemCodeParam(params);
     if(code){ loadItem(code); }
     else {
-      setStatus("warn","SDK initialized (build "+BUILD+"), but no <b>item_code</b> parameter was received. Available params: <code>"+escapeHtml(JSON.stringify(params))+"</code>. Pass a page parameter named <code>item_code</code>.");
+      setStatus("warn","SDK ready (build "+BUILD+"), but no <b>item_code</b> parameter was received. Available params: <code>"+escapeHtml(JSON.stringify(params))+"</code>. Pass a page parameter named <code>item_code</code>.");
       $('test-bar').style.display="block";
     }
   }
-  function afterFail(e){
-    if(settled) return; settled = true; clearTimeout(watchdog);
-    console.error("ZOHO.CREATOR.init() rejected with:", e);
+
+  function giveUp(reason){
     var info = sdkInfo();
     setStatus("err",
-      "<b>ZOHO.CREATOR.init() failed.</b> <code>"+escapeHtml(errToStr(e))+"</code><br>"+
-      "This means the SDK could not establish a Creator session — the usual cause is that this is running as an "+
-      "<b>external URL embed (Vercel) inside the page</b> rather than an <b>uploaded ZET widget</b>. "+
-      "Open the browser Console for the full error object.<br>"+
-      "<span style='opacity:.75'>build "+BUILD+" · ZOHO.CREATOR keys: "+escapeHtml((info.keys||[]).join(", "))+"</span>");
+      "<b>Creator SDK never became ready.</b> "+escapeHtml(reason)+"<br>"+
+      "If this is the <b>Vercel external embed</b>, that's expected — live data only works from an <b>uploaded ZET widget</b>. "+
+      "Open the browser Console for details.<br>"+
+      "<span style='opacity:.75'>build "+BUILD+" · ZOHO present: "+(typeof ZOHO!=="undefined")+
+      " · ZOHO.CREATOR keys: "+escapeHtml((info.keys||[]).join(", "))+
+      " · data method: "+(info.apiGetAll?"API.getAllRecords":(info.dataGet?"DATA.getRecords":"none"))+"</span>");
     $('test-bar').style.display="block";
   }
 
-  try{
-    var p = ZOHO.CREATOR.init();
-    if(p && typeof p.then === "function"){ p.then(afterInit, afterFail); }
-    else { afterInit(); } // some SDK builds return void and are ready synchronously
-  }catch(err){
-    afterFail(err);
-  }
+  // Poll for the SDK to become usable in ANY of its shapes. Creator injects the
+  // data API (API.getAllRecords / DATA.getRecords) at runtime inside the widget
+  // host, so we don't strictly need init() — we only call it if it exists.
+  var initTried = false, start = Date.now(), MAX_WAIT = 20000;
+  (function poll(){
+    if(settled) return;
+    var C = (typeof ZOHO!=="undefined") ? ZOHO.CREATOR : null;
+    var info = sdkInfo();
+
+    // 1) If the data API is already present, we're good — go.
+    if(info.apiGetAll || info.dataGet){ return done(proceed); }
+
+    // 2) If init() exists and we haven't called it, call it once — it wires up
+    //    the data API after the handshake with the Creator parent frame.
+    if(C && typeof C.init === "function" && !initTried){
+      initTried = true;
+      try{
+        var p = C.init();
+        if(p && typeof p.then === "function"){
+          p.then(function(){ /* poll loop will detect the data API */ },
+                 function(e){ console.error("init() rejected:", e); });
+        }
+      }catch(err){ console.error("init() threw:", err); }
+    }
+
+    // 3) Keep waiting until the data API shows up or we time out.
+    if(Date.now() - start > MAX_WAIT){
+      return done(function(){ giveUp("Waited "+(MAX_WAIT/1000)+"s; the data API (getAllRecords/getRecords) never appeared."); });
+    }
+    setTimeout(poll, 200);
+  })();
 }
 
 document.addEventListener('DOMContentLoaded', boot);
