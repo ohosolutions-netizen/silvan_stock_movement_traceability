@@ -196,7 +196,7 @@
 "use strict";
 
 /* Build marker — bump on each deploy so we can confirm the loaded version. */
-var BUILD = "2026-09-15-f";
+var BUILD = "2026-09-15-g";
 
 /* =========================================================================
    1) CONFIGURATION  — edit ONLY this block once you confirm link names.
@@ -437,8 +437,15 @@ function loadItem(code){
     STATE.itemName = itemMaster.length ? lv(itemMaster[0][FIELD.itemMaster.fields.name]) : (so.length? lv(so[0][FIELD.salesOrder.fields.name]) : code);
     $("item-name-tag").textContent = STATE.itemName || code;
 
-    // Batch transfer: no item-code field -> filter by item NAME (best available key).
-    PROG.batchTransfer="…"; paintProgress(code);
+    // Render the essential data IMMEDIATELY — do not block on the optional
+    // Batch Transfer (transit) report, which may be slow or fail.
+    RAW.batchTransfer = RAW.batchTransfer || [];
+    transformAndRender({itemMaster:itemMaster, so:so, po:po, inv:inv, cn:cn, bt:RAW.batchTransfer});
+    renderDebug();
+
+    // Batch transfer is best-effort: it has no item-code field, so we filter by
+    // item NAME. Fetch it in the background and re-render if it returns rows.
+    PROG.batchTransfer="…";
     var btCrit = STATE.itemName ? eqCriteria(FIELD.batchTransfer.itemNameField+".display_value", STATE.itemName) : null;
     fetchAll(FIELD.batchTransfer.report, btCrit).then(
       function(bt){ RAW.batchTransfer=bt; PROG.batchTransfer="✓ "+bt.length+" record(s)"; },
@@ -446,9 +453,6 @@ function loadItem(code){
     ).then(function(){
       transformAndRender({itemMaster:itemMaster, so:so, po:po, inv:inv, cn:cn, bt:RAW.batchTransfer||[]});
       renderDebug();
-      // if every report failed, keep the diagnostic banner up instead of a blank table
-      var anyOk = specs.some(function(s){ return (results[s[0]]||[]).length>=0 && String(PROG[s[0]]).indexOf("✓")===0; });
-      if(!anyOk){ paintProgress(code); }
     });
   });
 }
@@ -716,7 +720,7 @@ function boot(){
   $('test-go').addEventListener('click',function(){ var c=$('test-code').value.trim(); if(c) loadItem(c); });
   $('test-code').addEventListener('keydown',function(e){ if(e.key==="Enter"){ var c=e.target.value.trim(); if(c) loadItem(c);} });
 
-  if(location.search.indexOf("debug=1")>-1){ $('debug').open=true; }
+  $('debug').open = true; // auto-open during integration; collapse later for production
 
   setStatus("info","Loading Creator SDK… <span style='opacity:.7'>(build "+BUILD+")</span>");
 
