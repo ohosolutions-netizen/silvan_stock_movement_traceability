@@ -196,7 +196,7 @@
 "use strict";
 
 /* Build marker — bump on each deploy so we can confirm the loaded version. */
-var BUILD = "2026-09-16-l";
+var BUILD = "2026-09-16-m";
 
 /* =========================================================================
    1) CONFIGURATION  — edit ONLY this block once you confirm link names.
@@ -256,17 +256,22 @@ var FIELD = {
     }
   },
 
-  // PO HEADER report. One PO can be built from several Material Requests, so the
-  // per-MR quantity lives in each PO line item's Material_Request_Line_items
-  // subform. We match by MR number and read that MR's quantity for our item.
+  // PO HEADER report: Order_No + Material_Request (array of MRs this PO covers).
+  // The per-MR quantity comes from the allocation subform, not from here.
   purchaseOrderHeader: {
     report:  "Purchase_Order_Report",
     fields:{
-      poNo:      "Order_No",                      // "PO/356"
-      itemCode:  "ITEMCODE",                      // within a PO line item
-      mrLine:    "Material_Request_Line_items"    // subform of MR allocations (MR ref + QTY)
+      poNo:    "Order_No",          // "PO/361"
+      poDate:  "Date_field",        // "16-Sep-2026"
+      mrField: "Material_Request"   // array of {Request_No}
     }
   },
+
+  // The allocation hub + its quantity subform + purchase transit. Joined on the
+  // allocation ID (All_Material_Request_Allocations record ID).
+  allocations:    { report:"All_Material_Request_Allocations", fields:{ itemMaster:"Item_Master" } },
+  allocationQty:  { report:"MATERIAL_REQUEST_ALLOCATION_SUBFORM_Report", fields:{ alloc:"MATERIAL_REQUEST_ALLOCATION", mr:"Material_Request", qty:"QTY", reqQty:"REQ_QTY" } },
+  purchaseTransit:{ report:"API_PURCHASE_TRANSIT", fields:{ no:"Order_No", lineItems:"Line_Item", liItemCode:"ITEMCODE", liAlloc:"MATERIAL_REQUEST_ALLOCATION" } },
 
   batchTransfer: {                        // inter-branch "transit" movement
     report:  "All_Batch_Transfer_Line_Items",
@@ -316,11 +321,7 @@ var PAGE_SIZE = 200; // Creator max per page for getAllRecords
 // Reports sampled purely to inspect their (nested) structure in the debug panel
 // and console — not yet wired into the table. Used to design the transit match:
 // Purchase Transit -> Line items -> Material Allocations -> MR Allocation subform -> QTY.
-var SAMPLE_REPORTS = [
-  "API_PURCHASE_TRANSIT",
-  "All_Material_Request_Allocations",
-  "MATERIAL_REQUEST_ALLOCATION_SUBFORM_Report"
-];
+var SAMPLE_REPORTS = []; // (structures now known; these reports are fetched & used)
 
 /* =========================================================================
    2) SMALL HELPERS
@@ -518,7 +519,9 @@ function fetchPage1(reportName, criteria){
 var RAW = {};   // last raw responses, for the debug panel
 var CN_HDR = {};// credit-note header records keyed by record ID (id -> record)
 var MR_MAP = {};// SO number -> {mr, date} from the Material Request report
-var PO_BY_MR = {};// MR number -> {poNo, poDate, qty} from the PO header report
+var PO_BY_MR = {};// MR number -> {poNo, poDate} from the PO header report
+var ALLOC_BY_MR = {};// MR number -> {qty, reqQty, allocIds:[]} for THIS item
+var TRANSIT_BY_MR = {};// MR number -> {no, date, qty} for THIS item
 var STATE = { view:"product", itemCode:"", itemName:"", rows:[] };
 
 // Extract SO number, MR number and date from a Material Request record by value
@@ -537,7 +540,7 @@ function scanMR(rec){
 var PROG = {}; // per-report progress for the status banner
 function paintProgress(code){
   var info = sdkInfo();
-  var order=[["sdk","SDK"],["itemMaster","Item Master"],["salesOrder","Sales Order"],["materialRequest","Material Request"],["purchaseOrder","Purchase Order"],["invoice","Invoice"],["creditNote","Credit Note"],["batchTransfer","Batch Transfer"]];
+  var order=[["sdk","SDK"],["itemMaster","Item Master"],["salesOrder","Sales Order"],["materialRequest","Material Request"],["purchaseOrder","Purchase Order"],["purchaseOrderHeader","PO header"],["allocations","Allocations/Transit"],["invoice","Invoice"],["creditNote","Credit Note"],["batchTransfer","Batch Transfer"]];
   var lines = order.filter(function(o){return PROG[o[0]]!==undefined;}).map(function(o){
     return '<div style="font-size:12px"><b>'+o[1]+':</b> '+PROG[o[0]]+'</div>';
   }).join("");
@@ -636,9 +639,8 @@ function loadItem(code){
       ).then(rerender);
     }
 
-    // Enrichment B3 — PO per MR: fetch the PO header report for the PO numbers
-    // that involve this item, and map MR number -> {poNo, poDate, qty} from each
-    // PO line item's Material_Request_Line_items subform.
+    // Enrichment B3 — PO number per MR: from Purchase_Order_Report's
+    // Material_Request array (one PO can cover several MRs).
     PO_BY_MR = {};
     var PHF = FIELD.purchaseOrderHeader.fields;
     var poNos = uniq((core.po||[]).map(function(r){ return lv(r[FIELD.purchaseOrder.fields.poNo]); }));
@@ -649,17 +651,11 @@ function loadItem(code){
         function(all){
           RAW.purchaseOrderHeader = all;
           all.forEach(function(po){
-            var poNo = lv(po[PHF.poNo]);
-            var poDate = valueByKeyLike(po, ["date"], ["added_time","modified","updat"]);
-            findLineItems(po).forEach(function(li){
-              var ic = String(lv(li[PHF.itemCode] || li.ITEMCODE || li.ITEM_CODE || li.Item_Code));
-              if(ic !== String(code)) return;              // only this item's line
-              var mrls = li[PHF.mrLine]; var list = Array.isArray(mrls)?mrls:(mrls?[mrls]:[]);
-              list.forEach(function(m){
-                var mrNo = mrNoFrom(m);
-                var q = num(m.QTY!=null ? m.QTY : valueByKeyLike(m, ["qty","quantity"], ["balance","rem"]));
-                if(mrNo) PO_BY_MR[mrNo] = { poNo:poNo, poDate:poDate, qty:q };
-              });
+            var poNo = lv(po[PHF.poNo]), poDate = lv(po[PHF.poDate]);
+            var mrs = po[PHF.mrField]; var list = Array.isArray(mrs)?mrs:(mrs?[mrs]:[]);
+            list.forEach(function(m){
+              var mrNo = (m && typeof m==="object") ? lv(m.Request_No || m.zc_display_value) : lv(m);
+              if(mrNo) PO_BY_MR[mrNo] = { poNo:poNo, poDate:poDate };
             });
           });
           PROG.purchaseOrderHeader = "✓ "+all.length+" record(s); MRs mapped: "+Object.keys(PO_BY_MR).length;
@@ -667,6 +663,53 @@ function loadItem(code){
         function(e){ RAW.purchaseOrderHeader=[]; PROG.purchaseOrderHeader="✗ "+errToStr(e); console.error("[purchaseOrderHeader]", e); }
       ).then(rerender);
     }
+
+    // Enrichment E — Allocation quantities + Transit, joined on the allocation ID.
+    // 1) allocations for THIS item (record ID = allocation id, Item_Master filters)
+    // 2) subform gives per-MR QTY (allocated/transit) and REQ_QTY (MR requested)
+    // 3) transit report gives the transit no/date per allocation
+    ALLOC_BY_MR = {}; TRANSIT_BY_MR = {};
+    var itemId2 = core.itemMaster.length ? lv(core.itemMaster[0].ID) : "";
+    PROG.allocations="…"; paintProgress(code);
+    fetchAll(FIELD.allocations.report, null).then(function(allocs){
+      RAW.allocations = allocs;
+      var itemAlloc = {};
+      allocs.forEach(function(a){
+        var im = a[FIELD.allocations.fields.itemMaster]; var imId = im && im.ID;
+        if(imId && String(imId)===String(itemId2)) itemAlloc[lv(a.ID)] = true;
+      });
+      return delay(200).then(function(){ return fetchAll(FIELD.allocationQty.report, null); }).then(function(subs){
+        RAW.allocationQty = subs;
+        var AF = FIELD.allocationQty.fields;
+        subs.forEach(function(s){
+          var allocId = lookupId(s[AF.alloc]);
+          if(!itemAlloc[allocId]) return;                 // only this item's allocations
+          var mrObj = s[AF.mr];
+          var mr = (mrObj && typeof mrObj==="object") ? lv(mrObj.Request_No || mrObj.zc_display_value) : lv(mrObj);
+          if(!mr) return;
+          var e = ALLOC_BY_MR[mr] || { qty:0, reqQty:0, allocIds:[] };
+          e.qty += num(s[AF.qty]); e.reqQty += num(s[AF.reqQty]); e.allocIds.push(allocId);
+          ALLOC_BY_MR[mr] = e;
+        });
+        return delay(200).then(function(){ return fetchAll(FIELD.purchaseTransit.report, null); }).then(function(transits){
+          RAW.purchaseTransit = transits;
+          var TF = FIELD.purchaseTransit.fields, allocToTransit = {};
+          transits.forEach(function(t){
+            var no = lv(t[TF.no]), date = valueByKeyLike(t, ["delivery_date","receives_date","date"], ["added_time"]);
+            (t[TF.lineItems]||[]).forEach(function(li){
+              var allocId = lookupId(li[TF.liAlloc]);
+              if(allocId) allocToTransit[allocId] = { no:no, date:date };
+            });
+          });
+          Object.keys(ALLOC_BY_MR).forEach(function(mr){
+            var e = ALLOC_BY_MR[mr], t=null;
+            e.allocIds.some(function(id){ if(allocToTransit[id]){ t=allocToTransit[id]; return true; } return false; });
+            TRANSIT_BY_MR[mr] = { no: t?t.no:"", date: t?t.date:"", qty: e.qty };
+          });
+          PROG.allocations = "✓ MRs with alloc: "+Object.keys(ALLOC_BY_MR).length;
+        });
+      });
+    }).catch(function(e){ PROG.allocations="✗ "+errToStr(e); console.error("[allocations]", e); }).then(rerender);
 
     // Enrichment C — Material Request (header report), joined by SO number.
     // Fetch all MRs and map SO number -> {mr, date} using value patterns.
@@ -755,11 +798,14 @@ function transformAndRender(D){
     var soNo = lv(r[S.orderNo]);
     var mrHit = MR_MAP[soNo];
     var mrNo  = mrHit ? mrHit.mr : "";
-    // PO for THIS row's material request (qty = that MR's allocation); else fallback.
+    var alloc = mrNo ? ALLOC_BY_MR[mrNo] : null;     // per-MR quantities for this item
+    // PO for THIS row's material request; qty = the MR's requested qty (REQ_QTY).
     var poHit = mrNo ? PO_BY_MR[mrNo] : null;
     var poNo   = poHit ? poHit.poNo   : fbPoNo;
     var poDate = poHit ? poHit.poDate : fbPoDate;
-    var poQty  = poHit ? poHit.qty    : fbPoQty;
+    var poQty  = alloc ? alloc.reqQty : fbPoQty;
+    // Transit for THIS row's material request (allocated/received qty).
+    var trHit  = mrNo ? TRANSIT_BY_MR[mrNo] : null;
     // Invoices for THIS sales order (by SO number); unattributed ones on row 0.
     var rowInv = (invBySo[soNo] || []).slice();
     if(i===0) rowInv = rowInv.concat(invNoSo);
@@ -774,7 +820,7 @@ function transformAndRender(D){
       so:[ soNo, lv(r[S.orderDate]) ],
       mr: mrHit ? [mrHit.mr, mrHit.date] : ["",""],
       po: poNo ? [poNo, poDate] : ["",""],
-      transit: btNo ? [btNo, "", "moving"] : ["","",""],
+      transit: (trHit && trHit.no) ? [trHit.no, trHit.date, "received"] : ["","",""],
       grn:["",""],
       bill:["",""],
       ordered: ordered,
@@ -784,8 +830,8 @@ function transformAndRender(D){
       unit: lv(r[S.unit]) || "box",
       poGroup: poNo || null,
       poQty: poQty,
-      mrQty: "",              // MR report is header-level; no per-item qty
-      transitQty: btQty,
+      mrQty: alloc ? alloc.reqQty : "",   // MR requested qty (from allocation)
+      transitQty: trHit ? trHit.qty : "",
       invoices: rowInv
     };
   });
@@ -936,7 +982,7 @@ function render(){
    7) DEBUG / FIELD DISCOVERY panel
    ========================================================================= */
 function renderDebug(){
-  var order=[["itemMaster","Item Master"],["salesOrder","Sales Order item-wise"],["materialRequest","Material Request"],["purchaseOrder","PO item-wise"],["purchaseOrderHeader","PO header (Purchase_Order_Report)"],["batchTransfer","Batch Transfer"],["invoice","Sales Invoice (API_SALES_INVOICES)"],["creditNote","Credit Note (API_CREDIT_NOTES)"]];
+  var order=[["itemMaster","Item Master"],["salesOrder","Sales Order item-wise"],["materialRequest","Material Request"],["purchaseOrder","PO item-wise"],["purchaseOrderHeader","PO header (Purchase_Order_Report)"],["allocations","Allocations (All_Material_Request_Allocations)"],["allocationQty","Allocation qty subform"],["purchaseTransit","Purchase Transit (API_PURCHASE_TRANSIT)"],["batchTransfer","Batch Transfer"],["invoice","Sales Invoice (API_SALES_INVOICES)"],["creditNote","Credit Note (API_CREDIT_NOTES)"]];
   // Extra discovery reports (sampled, not yet wired into the table).
   SAMPLE_REPORTS.forEach(function(rep){ order.push([rep, rep]); });
   var out="";
