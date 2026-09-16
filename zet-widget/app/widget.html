@@ -196,7 +196,7 @@
 "use strict";
 
 /* Build marker — bump on each deploy so we can confirm the loaded version. */
-var BUILD = "2026-09-15-h";
+var BUILD = "2026-09-16-a";
 
 /* =========================================================================
    1) CONFIGURATION  — edit ONLY this block once you confirm link names.
@@ -273,9 +273,19 @@ var FIELD = {
     itemCode:"ITEM_CODE",                 // confirmed
     fields:{
       cnNo:   "Credit_Note.CreditNote_Number", // add as a report column (optional)
-      cnNoLk: "Credit_Note",                    // fallback (currently empty {})
+      cnNoLk: "Credit_Note",                    // lookup to the CN header (join key = its .ID)
       cnDate: "Credit_Note.Date_field",         // add as a report column (optional)
       qty:    "QTY"
+    }
+  },
+
+  // Credit Note HEADER report — used to look up the CN date/number by matching
+  // the credit-note record ID referenced from each line item.
+  creditNoteHeader: {
+    report:  "API_CREDIT_NOTES",
+    fields:{
+      date:   "Date_field",   // TODO confirm from debug dump
+      number: "Order_No"      // TODO confirm from debug dump
     }
   }
 };
@@ -316,6 +326,10 @@ function lv(v){
 }
 function num(v){ var n=parseFloat(lv(v).toString().replace(/[^0-9.\-]/g,"")); return isNaN(n)?0:n; }
 function money(n){ return "₹"+(Number(n)||0).toLocaleString('en-IN'); }
+
+// Record ID referenced by a lookup field value ({ID, zc_display_value} | "").
+function lookupId(v){ return (v && typeof v==="object") ? (v.ID || v.id || "") : (typeof v==="string" && /^\d{10,}$/.test(v) ? v : ""); }
+function uniq(a){ return a.filter(function(x,i){ return x && a.indexOf(x)===i; }); }
 
 // A document number: prefer a real report column (subKey), else the lookup's
 // display value — but suppress bare 15+ digit record IDs (they aren't useful).
@@ -396,10 +410,18 @@ function eqCriteria(field, val){
   return '(' + field + ' == "' + safe + '")';
 }
 
+// Single page only (for sampling a large report's structure in the debug panel).
+function fetchPage1(reportName, criteria){
+  return withTimeout(callGetRecords(reportName, criteria, 1), FETCH_TIMEOUT_MS, reportName)
+    .then(function(resp){ return (resp && resp.data) ? resp.data : []; })
+    .catch(function(err){ if(err && (err.code===3100||err.code==="3100")) return []; throw err; });
+}
+
 /* =========================================================================
    4) LOAD everything for one item code, then transform + render.
    ========================================================================= */
 var RAW = {};   // last raw responses, for the debug panel
+var CN_HDR = {};// credit-note header records keyed by record ID (id -> record)
 var STATE = { view:"product", itemCode:"", itemName:"", rows:[] };
 
 var PROG = {}; // per-report progress for the status banner
@@ -441,29 +463,50 @@ function loadItem(code){
   });
 
   Promise.all(jobs).then(function(){
-    var itemMaster=results.itemMaster||[], so=results.salesOrder||[], po=results.purchaseOrder||[], inv=results.invoice||[], cn=results.creditNote||[];
-    STATE.itemName = (( itemMaster.length ? lv(itemMaster[0][FIELD.itemMaster.fields.name]) : (so.length? lv(so[0][FIELD.salesOrder.fields.name]) : code) )+"").trim();
+    var core = {
+      itemMaster:results.itemMaster||[], so:results.salesOrder||[], po:results.purchaseOrder||[],
+      inv:results.invoice||[], cn:results.creditNote||[]
+    };
+    STATE.itemName = (( core.itemMaster.length ? lv(core.itemMaster[0][FIELD.itemMaster.fields.name]) : (core.so.length? lv(core.so[0][FIELD.salesOrder.fields.name]) : code) )+"").trim();
     $("item-name-tag").textContent = STATE.itemName || code;
 
-    // Render the essential data IMMEDIATELY — do not block on the optional
-    // Batch Transfer (transit) report, which may be slow or fail.
     RAW.batchTransfer = RAW.batchTransfer || [];
-    transformAndRender({itemMaster:itemMaster, so:so, po:po, inv:inv, cn:cn, bt:RAW.batchTransfer});
-    renderDebug();
+    function rerender(){
+      transformAndRender({itemMaster:core.itemMaster, so:core.so, po:core.po, inv:core.inv, cn:core.cn, bt:RAW.batchTransfer||[]});
+      renderDebug();
+    }
+    // Render essentials immediately; enrichments below re-render when they land.
+    rerender();
 
-    // Batch transfer is best-effort: it has no item-code column (item is the
-    // lookup "Item"), so filter by the item master record ID. Fetch in the
-    // background and re-render if it returns rows.
+    // Enrichment A — Batch Transfer (transit): filter by item master record ID.
     PROG.batchTransfer="…";
-    var itemId = itemMaster.length ? lv(itemMaster[0].ID) : "";
+    var itemId = core.itemMaster.length ? lv(core.itemMaster[0].ID) : "";
     var btCrit = itemId ? '('+FIELD.batchTransfer.itemLookupField+' == "'+itemId+'")' : null;
     fetchAll(FIELD.batchTransfer.report, btCrit).then(
       function(bt){ RAW.batchTransfer=bt; PROG.batchTransfer="✓ "+bt.length+" record(s)"; },
       function(e){ RAW.batchTransfer=[]; PROG.batchTransfer="✗ "+((e&&(e.message||e.code))||"error"); console.error("[batchTransfer]", e); }
-    ).then(function(){
-      transformAndRender({itemMaster:itemMaster, so:so, po:po, inv:inv, cn:cn, bt:RAW.batchTransfer||[]});
-      renderDebug();
-    });
+    ).then(rerender);
+
+    // Enrichment B — Credit Note dates/numbers from API_CREDIT_NOTES, matched by
+    // the credit-note record ID referenced on each line item.
+    var cnIds = uniq((core.cn||[]).map(function(r){ return lookupId(r[FIELD.creditNote.fields.cnNoLk]); }));
+    CN_HDR = {};
+    if(cnIds.length){
+      PROG.creditNoteHeader="… ("+cnIds.length+" ids)";
+      var crit = "(" + cnIds.map(function(id){ return 'ID == "'+id+'"'; }).join(" || ") + ")";
+      fetchAll(FIELD.creditNoteHeader.report, crit).then(
+        function(h){ RAW.creditNoteHeader=h; h.forEach(function(x){ CN_HDR[lv(x.ID)]=x; }); PROG.creditNoteHeader="✓ "+h.length+" record(s)"; },
+        function(e){ RAW.creditNoteHeader=[]; PROG.creditNoteHeader="✗ "+((e&&(e.message||e.code))||"error"); console.error("[creditNoteHeader]", e); }
+      ).then(rerender);
+    } else {
+      // Line items carry no CN id — sample the header report so we can see its
+      // fields and figure out the correct join key.
+      PROG.creditNoteHeader="✗ no CN id on line items (sampling header)";
+      fetchPage1(FIELD.creditNoteHeader.report, null).then(
+        function(h){ RAW.creditNoteHeader=h; PROG.creditNoteHeader="⚠ header has "+h.length+" sample rows; line items lack CN id"; },
+        function(e){ RAW.creditNoteHeader=[]; PROG.creditNoteHeader="✗ header sample "+((e&&(e.message||e.code))||"error"); console.error("[creditNoteHeader sample]", e); }
+      ).then(renderDebug);
+    }
   });
 }
 
@@ -486,9 +529,10 @@ function transformAndRender(D){
     };
   });
   var creditNotes = D.cn.map(function(r){
+    var hdr = CN_HDR[ lookupId(r[F.creditNote.fields.cnNoLk]) ];
     return {
-      no:   docNo(r, F.creditNote.fields.cnNo, F.creditNote.fields.cnNoLk),
-      date: lv(r[F.creditNote.fields.cnDate]),
+      no:   docNo(r, F.creditNote.fields.cnNo, F.creditNote.fields.cnNoLk) || (hdr? lv(hdr[F.creditNoteHeader.fields.number]) : ""),
+      date: lv(r[F.creditNote.fields.cnDate]) || (hdr? lv(hdr[F.creditNoteHeader.fields.date]) : ""),
       qty:  num(r[F.creditNote.fields.qty])
     };
   });
@@ -677,7 +721,7 @@ function render(){
    7) DEBUG / FIELD DISCOVERY panel
    ========================================================================= */
 function renderDebug(){
-  var order=[["itemMaster","Item Master"],["salesOrder","Sales Order item-wise"],["purchaseOrder","PO item-wise"],["batchTransfer","Batch Transfer"],["invoice","Sales Invoice"],["creditNote","Credit Note"]];
+  var order=[["itemMaster","Item Master"],["salesOrder","Sales Order item-wise"],["purchaseOrder","PO item-wise"],["batchTransfer","Batch Transfer"],["invoice","Sales Invoice"],["creditNote","Credit Note (line items)"],["creditNoteHeader","Credit Note HEADER (API_CREDIT_NOTES)"]];
   var out="";
   order.forEach(function(pair){
     var key=pair[0], label=pair[1], recs=RAW[key]||[];
