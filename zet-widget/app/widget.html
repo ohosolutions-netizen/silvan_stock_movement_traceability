@@ -196,7 +196,7 @@
 "use strict";
 
 /* Build marker — bump on each deploy so we can confirm the loaded version. */
-var BUILD = "2026-09-16-p";
+var BUILD = "2026-09-16-q";
 
 /* =========================================================================
    1) CONFIGURATION  — edit ONLY this block once you confirm link names.
@@ -239,10 +239,12 @@ var FIELD = {
     // a multi-lookup ARRAY of {Order_No, zc_display_value}; one MR can list many SOs.
     report:  "Material_Request_Report",
     fields:{
-      mrNo:      "Request_No",     // "MR/079"
-      date:      "Date_field",     // "16-Sep-2026"
-      soRefs:    "Sales_Order_no", // array of lookup objects
-      soOrderNo: "Order_No"        // within a Sales_Order_no element
+      mrNo:      "Request_No",       // "MR/079"
+      date:      "Date_field",       // "16-Sep-2026"
+      soRefs:    "Sales_Order_no",   // array of lookup objects
+      soOrderNo: "Order_No",         // within a Sales_Order_no element
+      destBranch:"Destination_Branch", // branch (warehouse) requesting the stock
+      srcBranch: "Source_Branch"
     }
   },
 
@@ -748,11 +750,12 @@ function loadItem(code){
         var MF = FIELD.materialRequest.fields;
         all.forEach(function(rec){
           var mr = lv(rec[MF.mrNo]), date = lv(rec[MF.date]);
+          var branch = lv(rec[MF.destBranch]) || lv(rec[MF.srcBranch]);
           var refs = rec[MF.soRefs];
           var list = Array.isArray(refs) ? refs : (refs ? [refs] : []);
           list.forEach(function(ref){
             var soNo = (ref && typeof ref==="object") ? lv(ref[MF.soOrderNo] || ref.zc_display_value || ref.display_value) : lv(ref);
-            if(soNo) MR_MAP[soNo] = { mr:mr, date:date };
+            if(soNo) MR_MAP[soNo] = { mr:mr, date:date, branch:branch };
           });
         });
         PROG.materialRequest = "✓ "+all.length+" record(s)";
@@ -843,8 +846,8 @@ function transformAndRender(D){
       id: i+1,
       name: ((STATE.itemName || lv(r[S.name]) || "")+"").trim(),
       code: STATE.itemCode,
-      branch: lv(r[S.customer]) || "—",   // no branch column in report; show customer
-      customer: "",                        // customer already used as the main line
+      branch: (mrHit && mrHit.branch) ? mrHit.branch : (lv(r[S.customer]) || "—"), // warehouse/branch from MR
+      customer: lv(r[S.customer]),         // shown as subtext under the branch
       salesman: lv(r[S.salesman]) || "—",
       vendor:"—",
       so:[ soNo, lv(r[S.orderDate]) ],
@@ -920,7 +923,7 @@ function renderLines(list){
   $('thead').innerHTML=
    '<tr>'+
      '<th rowspan="2">Item</th>'+
-     '<th rowspan="2">Branch / Sales Order</th>'+
+     '<th rowspan="2">Branch / Customer</th>'+
      '<th rowspan="2">Salesman</th>'+
      '<th colspan="3" class="grp">Sales Order</th>'+
      '<th colspan="3" class="grp">Material Request</th>'+
