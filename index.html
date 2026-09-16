@@ -196,7 +196,7 @@
 "use strict";
 
 /* Build marker — bump on each deploy so we can confirm the loaded version. */
-var BUILD = "2026-09-16-i";
+var BUILD = "2026-09-16-j";
 
 /* =========================================================================
    1) CONFIGURATION  — edit ONLY this block once you confirm link names.
@@ -300,6 +300,15 @@ var FIELD = {
 };
 
 var PAGE_SIZE = 200; // Creator max per page for getAllRecords
+
+// Reports sampled purely to inspect their (nested) structure in the debug panel
+// and console — not yet wired into the table. Used to design the transit match:
+// Purchase Transit -> Line items -> Material Allocations -> MR Allocation subform -> QTY.
+var SAMPLE_REPORTS = [
+  "API_PURCHASE_TRANSIT",
+  "All_Material_Request_Allocations",
+  "MATERIAL_REQUEST_ALLOCATION_SUBFORM_Report"
+];
 
 /* =========================================================================
    2) SMALL HELPERS
@@ -617,6 +626,22 @@ function loadItem(code){
       },
       function(e){ RAW.materialRequest=[]; PROG.materialRequest="✗ "+errToStr(e); console.error("[materialRequest]", e); }
     ).then(rerender);
+
+    // Discovery — sample the transit-related reports so their (nested) structure
+    // can be inspected. Fetched sequentially to avoid concurrency errors.
+    (function sampleNext(j){
+      if(j >= SAMPLE_REPORTS.length) return;
+      var rep = SAMPLE_REPORTS[j];
+      PROG[rep] = "…"; paintProgress(code);
+      fetchPage1(rep, null).then(
+        function(rows){
+          RAW[rep] = rows; PROG[rep] = "✓ "+rows.length+" sample row(s)";
+          console.log("=== SAMPLE ["+rep+"] "+rows.length+" row(s) ===");
+          console.log(JSON.stringify(rows[0]||{}, null, 2));
+        },
+        function(e){ RAW[rep]=[]; PROG[rep]="✗ "+errToStr(e); console.error("["+rep+"]", e); }
+      ).then(function(){ renderDebug(); return delay(200); }).then(function(){ sampleNext(j+1); });
+    })(0);
   });
 }
 
@@ -843,11 +868,14 @@ function render(){
    7) DEBUG / FIELD DISCOVERY panel
    ========================================================================= */
 function renderDebug(){
-  var order=[["itemMaster","Item Master"],["salesOrder","Sales Order item-wise"],["materialRequest","Material Request"],["purchaseOrder","PO item-wise"],["batchTransfer","Batch Transfer"],["invoice","Sales Invoice"],["creditNote","Credit Note (API_CREDIT_NOTES)"]];
+  var order=[["itemMaster","Item Master"],["salesOrder","Sales Order item-wise"],["materialRequest","Material Request"],["purchaseOrder","PO item-wise"],["batchTransfer","Batch Transfer"],["invoice","Sales Invoice (API_SALES_INVOICES)"],["creditNote","Credit Note (API_CREDIT_NOTES)"]];
+  // Extra discovery reports (sampled, not yet wired into the table).
+  SAMPLE_REPORTS.forEach(function(rep){ order.push([rep, rep]); });
   var out="";
   order.forEach(function(pair){
     var key=pair[0], label=pair[1], recs=RAW[key]||[];
-    out+='<div class="db-rep"><h4>'+label+' — report "'+FIELD[key].report+'" — '+recs.length+' record(s)</h4>';
+    var repName = (FIELD[key] && FIELD[key].report) ? FIELD[key].report : key;
+    out+='<div class="db-rep"><h4>'+label+' — report "'+repName+'" — '+recs.length+' record(s)</h4>';
     if(recs.length){
       out+='<div class="db-mini">Field keys returned:</div><div class="db-keys">'+Object.keys(recs[0]).join("\n")+'</div>';
       out+='<div class="db-mini" style="margin-top:6px">First record (values):</div><div class="db-keys">'+escapeHtml(JSON.stringify(recs[0],null,1))+'</div>';
