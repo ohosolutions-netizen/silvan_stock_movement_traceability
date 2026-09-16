@@ -196,7 +196,7 @@
 "use strict";
 
 /* Build marker — bump on each deploy so we can confirm the loaded version. */
-var BUILD = "2026-09-16-d";
+var BUILD = "2026-09-16-e";
 
 /* =========================================================================
    1) CONFIGURATION  — edit ONLY this block once you confirm link names.
@@ -394,23 +394,31 @@ function withTimeout(p, ms, label){
   });
 }
 
+function delay(ms){ return new Promise(function(r){ setTimeout(r, ms); }); }
+
 function fetchAll(reportName, criteria){
   var out = [];
-  function grab(page){
+  function grab(page, attempt){
+    attempt = attempt || 1;
     return withTimeout(callGetRecords(reportName, criteria, page), FETCH_TIMEOUT_MS, reportName)
     .then(function(resp){
       var data = (resp && resp.data) ? resp.data : [];
       out = out.concat(data);
-      if(data.length === PAGE_SIZE) return grab(page+1); // more pages
+      if(data.length === PAGE_SIZE) return grab(page+1, 1); // more pages
       return out;
     })
     .catch(function(err){
       // "no records" is not a real error — return what we have.
       if(err && (err.code===3100 || err.code==="3100")) return out;
+      // transient error (rate limit / hiccup): back off and retry a couple of times.
+      if(attempt < 3){
+        console.warn("["+reportName+"] attempt "+attempt+" failed, retrying:", err);
+        return delay(attempt*600).then(function(){ return grab(page, attempt+1); });
+      }
       throw err;
     });
   }
-  return grab(1);
+  return grab(1, 1);
 }
 
 function eqCriteria(field, val){
@@ -472,8 +480,8 @@ function loadItem(code){
     var s = specs[i];
     return fetchAll(s[1], s[2]).then(
       function(d){ results[s[0]]=d; RAW[s[0]]=d; PROG[s[0]]="✓ "+d.length+" record(s)"; paintProgress(code); },
-      function(e){ results[s[0]]=[]; RAW[s[0]]=[]; PROG[s[0]]="✗ "+((e&&(e.message||e.code))||"error"); paintProgress(code); console.error("["+s[1]+"]", e); }
-    ).then(function(){ return runSeq(i+1); });
+      function(e){ results[s[0]]=[]; RAW[s[0]]=[]; PROG[s[0]]="✗ "+errToStr(e); paintProgress(code); console.error("["+s[1]+"]", e); }
+    ).then(function(){ return delay(200); }).then(function(){ return runSeq(i+1); });
   }
 
   runSeq(0).then(function(){
