@@ -196,7 +196,7 @@
 "use strict";
 
 /* Build marker — bump on each deploy so we can confirm the loaded version. */
-var BUILD = "2026-09-16-r";
+var BUILD = "2026-09-16-s";
 
 /* =========================================================================
    1) CONFIGURATION  — edit ONLY this block once you confirm link names.
@@ -331,7 +331,7 @@ var PAGE_SIZE = 200; // Creator max per page for getAllRecords
 // Reports sampled purely to inspect their (nested) structure in the debug panel
 // and console — not yet wired into the table. Used to design the transit match:
 // Purchase Transit -> Line items -> Material Allocations -> MR Allocation subform -> QTY.
-var SAMPLE_REPORTS = ["purchase_receives_Line_Item_Report"]; // sampled for confirming receive fields
+var SAMPLE_REPORTS = []; // (all structures known and wired)
 
 /* =========================================================================
    2) SMALL HELPERS
@@ -769,7 +769,7 @@ function loadItem(code){
       function(recs){
         RAW.purchaseReceive = recs;
         recs.forEach(function(rc){
-          if(/void/i.test(lv(rc.Status) || lv(rc.PR_Status) || lv(rc.Receive_Status))) return; // skip void
+          if(/void/i.test(lv(rc.POR_Status) || lv(rc.Status) || lv(rc.PR_Status) || "")) return; // skip void
           var poNo = poNoFromRec(rc, FIELD.purchaseReceive.fields.po);
           if(!poNo) return;
           var recNo = findByRegex(rc, /PR\/\d+/i) || lv(rc.PO_receive_No) || lv(rc.Order_No);
@@ -910,7 +910,7 @@ function transformAndRender(D){
       unit: lv(r[S.unit]) || "box",
       poGroup: poNo || null,
       poQty: poQty,
-      mrQty: alloc ? alloc.reqQty : "",   // MR requested qty (from allocation)
+      mrQty: alloc ? alloc.reqQty : ordered,  // MR requested qty (allocation REQ_QTY; else SO qty before allocation)
       transitQty: trHit ? trHit.qty : "",
       grnQty: allocQty,                    // received qty for this MR
       invoices: rowInv
