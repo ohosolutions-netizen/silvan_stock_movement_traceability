@@ -196,7 +196,7 @@
 "use strict";
 
 /* Build marker — bump on each deploy so we can confirm the loaded version. */
-var BUILD = "2026-09-16-t";
+var BUILD = "2026-09-16-u";
 
 /* =========================================================================
    1) CONFIGURATION  — edit ONLY this block once you confirm link names.
@@ -714,8 +714,16 @@ function loadItem(code){
           var mrObj = s[AF.mr];
           var mr = (mrObj && typeof mrObj==="object") ? lv(mrObj.Request_No || mrObj.zc_display_value) : lv(mrObj);
           if(!mr) return;
-          var e = ALLOC_BY_MR[mr] || { qty:0, reqQty:0, allocIds:[] };
-          e.qty += num(s[AF.qty]); e.reqQty += num(s[AF.reqQty]); e.allocIds.push(allocId);
+          // Zoho creates a fresh allocation record per stage (PO, transit, receive),
+          // each duplicated in this subform. Count each (MR, Sales Order line) once
+          // so the quantity isn't doubled when a later stage is created.
+          var soKey = lookupId(s.Sales_Order_Subform) || lv(s.Sales_Order_Subform) || "_";
+          var dkey = mr + "|" + soKey;
+          var e = ALLOC_BY_MR[mr] || { qty:0, reqQty:0, allocIds:[], _seen:{} };
+          if(!e._seen[dkey]){
+            e.qty += num(s[AF.qty]); e.reqQty += num(s[AF.reqQty]); e._seen[dkey] = true;
+          }
+          e.allocIds.push(allocId);
           ALLOC_BY_MR[mr] = e;
         });
         return delay(200).then(function(){ return fetchAll(FIELD.purchaseTransit.report, null); }).then(function(transits){
