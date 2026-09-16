@@ -196,7 +196,7 @@
 "use strict";
 
 /* Build marker — bump on each deploy so we can confirm the loaded version. */
-var BUILD = "2026-09-16-f";
+var BUILD = "2026-09-16-g";
 
 /* =========================================================================
    1) CONFIGURATION  — edit ONLY this block once you confirm link names.
@@ -235,18 +235,10 @@ var FIELD = {
   },
 
   materialRequest: {
-    report:  "Material_Request_Report",
-    itemCode:"ITEM_CODE",                 // TODO confirm from debug dump
-    fields:{
-      // guesses (verify from debug dump). Header-lookup style like Sales Order,
-      // OR a subform report — the transform handles both shapes.
-      mrNo:      "Lookup.Order_No",
-      mrDate:    "Lookup.Date_field",
-      qty:       "QTY",
-      lineItems: "Line_Item",             // if the report is header+subform
-      liItemCode:"ITEM_CODE",
-      liQty:     "QTY"
-    }
+    // Header-level report: DATE, REQUEST NO (MR/079), SO NO (SO/1126), branches.
+    // No item code — joined to Sales Orders by SO number. We read values by
+    // pattern (SO/…, MR/…, date) so unknown column link names don't matter.
+    report:  "Material_Request_Report"
   },
 
   purchaseOrder: {
@@ -452,7 +444,21 @@ function fetchPage1(reportName, criteria){
    ========================================================================= */
 var RAW = {};   // last raw responses, for the debug panel
 var CN_HDR = {};// credit-note header records keyed by record ID (id -> record)
+var MR_MAP = {};// SO number -> {mr, date} from the Material Request report
 var STATE = { view:"product", itemCode:"", itemName:"", rows:[] };
+
+// Extract SO number, MR number and date from a Material Request record by value
+// pattern, so we don't depend on the report's column link names.
+function scanMR(rec){
+  var so="", mr="", date="";
+  Object.keys(rec||{}).forEach(function(k){
+    var val = lv(rec[k]);
+    if(!so   && /^SO\/\d+/i.test(val))              so = val;
+    if(!mr   && /^MR\/\d+/i.test(val))              mr = val;
+    if(!date && /^\d{1,2}-[A-Za-z]{3}-\d{4}/.test(val)) date = val;
+  });
+  return { so:so, mr:mr, date:date };
+}
 
 var PROG = {}; // per-report progress for the status banner
 function paintProgress(code){
@@ -477,7 +483,6 @@ function loadItem(code){
   var specs = [
     ["itemMaster",    FIELD.itemMaster.report,    eqCriteria(FIELD.itemMaster.itemCode, code)],
     ["salesOrder",    FIELD.salesOrder.report,    eqCriteria(FIELD.salesOrder.itemCode, code)],
-    ["materialRequest",FIELD.materialRequest.report, eqCriteria(FIELD.materialRequest.itemCode, code)],
     ["purchaseOrder", FIELD.purchaseOrder.report, eqCriteria(FIELD.purchaseOrder.itemCode, code)],
     ["invoice",       FIELD.invoice.report,       eqCriteria(FIELD.invoice.itemCode, code)],
     ["creditNote",    FIELD.creditNote.report,    eqCriteria(FIELD.creditNote.itemCode, code)]
@@ -539,6 +544,18 @@ function loadItem(code){
         function(e){ PROG.creditNote = "✗ "+((e&&(e.message||e.code))||"error"); console.error("[creditNote fallback]", e); }
       ).then(rerender);
     }
+
+    // Enrichment C — Material Request (header report), joined by SO number.
+    // Fetch all MRs and map SO number -> {mr, date} using value patterns.
+    PROG.materialRequest="…"; paintProgress(code);
+    fetchAll(FIELD.materialRequest.report, null).then(
+      function(all){
+        RAW.materialRequest = all; MR_MAP = {};
+        all.forEach(function(rec){ var m=scanMR(rec); if(m.so) MR_MAP[m.so]={mr:m.mr, date:m.date}; });
+        PROG.materialRequest = "✓ "+all.length+" record(s)";
+      },
+      function(e){ RAW.materialRequest=[]; PROG.materialRequest="✗ "+errToStr(e); console.error("[materialRequest]", e); }
+    ).then(rerender);
   });
 }
 
@@ -575,26 +592,6 @@ function transformAndRender(D){
   // Item-code join can't tie a CN to a specific invoice, so group all under the first.
   if(invoices.length){ creditNotes.forEach(function(c){ invoices[0].creditNotes.push(c); }); }
 
-  // Material Request (item-level, first one shown). Handle a flat item-wise
-  // report (Lookup.Order_No / Date_field) OR a header+subform report (Line_Item).
-  var MF = F.materialRequest.fields, mrNo="", mrDate="", mrQty=0;
-  (D.mr||[]).some(function(rec){
-    var lines = rec[MF.lineItems];
-    if(Array.isArray(lines)){                    // header + subform shape
-      return lines.some(function(li){
-        if(String(lv(li[MF.liItemCode]))===String(STATE.itemCode)){
-          mrNo=lv(rec[MF.mrNo])||lv(rec["Order_No"])||lv(rec["MR_No"]);
-          mrDate=lv(rec[MF.mrDate])||lv(rec["Date_field"]);
-          mrQty=num(li[MF.liQty]); return true;
-        }
-        return false;
-      });
-    } else {                                     // flat item-wise shape
-      mrNo=lv(rec[MF.mrNo]); mrDate=lv(rec[MF.mrDate]); mrQty=num(rec[MF.qty]);
-      return true;
-    }
-  });
-
   // Item-level summaries (first PO / first branch-transfer shown on every line).
   var poNo   = D.po.length ? lv(D.po[0][F.purchaseOrder.fields.poNo])   : "";
   var poDate = D.po.length ? lv(D.po[0][F.purchaseOrder.fields.poDate]) : "";
@@ -604,6 +601,8 @@ function transformAndRender(D){
 
   var rows = D.so.map(function(r, i){
     var ordered = num(r[S.orderedQty]);
+    var soNo = lv(r[S.orderNo]);
+    var mrHit = MR_MAP[soNo];
     return {
       id: i+1,
       name: ((STATE.itemName || lv(r[S.name]) || "")+"").trim(),
@@ -612,8 +611,8 @@ function transformAndRender(D){
       customer: "",                        // customer already used as the main line
       salesman: lv(r[S.salesman]) || "—",
       vendor:"—",
-      so:[ lv(r[S.orderNo]), lv(r[S.orderDate]) ],
-      mr: mrNo ? [mrNo, mrDate] : ["",""],
+      so:[ soNo, lv(r[S.orderDate]) ],
+      mr: mrHit ? [mrHit.mr, mrHit.date] : ["",""],
       po: poNo ? [poNo, poDate] : ["",""],
       transit: btNo ? [btNo, "", "moving"] : ["","",""],
       grn:["",""],
@@ -625,7 +624,7 @@ function transformAndRender(D){
       unit: lv(r[S.unit]) || "box",
       poGroup: poNo || null,
       poQty: poQty,
-      mrQty: mrQty,
+      mrQty: "",              // MR report is header-level; no per-item qty
       transitQty: btQty,
       // invoices/credit notes are item-level; show them on the first line only
       invoices: i===0 ? invoices : []
