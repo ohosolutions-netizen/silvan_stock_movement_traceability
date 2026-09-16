@@ -196,7 +196,7 @@
 "use strict";
 
 /* Build marker — bump on each deploy so we can confirm the loaded version. */
-var BUILD = "2026-09-16-x";
+var BUILD = "2026-09-16-y";
 
 /* =========================================================================
    1) CONFIGURATION  — edit ONLY this block once you confirm link names.
@@ -701,14 +701,15 @@ function loadItem(code){
       RAW.allocations = allocs;
       return delay(200).then(function(){ return fetchAll(FIELD.allocationQty.report, null); }).then(function(subs){
         RAW.allocationQty = subs;
-        // allocation id -> { mr, qty, reqQty, soKey }
+        // allocation id -> [ { mr, qty, reqQty, soKey }, … ]  (one allocation can
+        // cover several MRs, so keep a LIST — not a single MR).
         var AF = FIELD.allocationQty.fields, allocMR = {};
         subs.forEach(function(s){
           var allocId = lookupId(s[AF.alloc]); if(!allocId) return;
           var mrObj = s[AF.mr];
           var mr = (mrObj && typeof mrObj==="object") ? lv(mrObj.Request_No || mrObj.zc_display_value) : lv(mrObj);
-          allocMR[allocId] = { mr:mr, qty:num(s[AF.qty]), reqQty:num(s[AF.reqQty]),
-                               soKey: lookupId(s.Sales_Order_Subform) || lv(s.Sales_Order_Subform) || "_" };
+          (allocMR[allocId] = allocMR[allocId] || []).push({ mr:mr, qty:num(s[AF.qty]), reqQty:num(s[AF.reqQty]),
+                               soKey: lookupId(s.Sales_Order_Subform) || lv(s.Sales_Order_Subform) || "_" });
         });
         return delay(200).then(function(){ return fetchAll(FIELD.purchaseTransit.report, null); }).then(function(transits){
           RAW.purchaseTransit = transits;
@@ -738,25 +739,26 @@ function loadItem(code){
                 var im = a[FIELD.allocations.fields.itemMaster];
                 if(!(im && String(im.ID)===String(itemId2))) return;
                 itemN++;
-                var allocId = lv(a.ID), info = allocMR[allocId];
-                if(!info || !info.mr) return;
-                var mr = info.mr;
-                // quantity — count each (MR, SO line) once (avoid per-stage doubling)
-                var e = ALLOC_BY_MR[mr] || { qty:0, reqQty:0, _seen:{} };
-                if(!e._seen[info.soKey]){ e.qty += info.qty; e.reqQty += info.reqQty; e._seen[info.soKey] = true; }
-                ALLOC_BY_MR[mr] = e;
-                // transit
-                var tId = a.Purchase_Transist && a.Purchase_Transist.ID;
-                if(tId && TRANSIT_HDR[tId] && !TRANSIT_BY_MR[mr]) TRANSIT_BY_MR[mr] = { no:TRANSIT_HDR[tId].no, date:TRANSIT_HDR[tId].date };
-                // receive (+ bill via the receive id)
+                var list = allocMR[lv(a.ID)];
+                if(!list || !list.length) return;
+                var tId  = a.Purchase_Transist && a.Purchase_Transist.ID;
                 var rObj = a.Purchase_Receives, rId = rObj && rObj.ID;
-                if(rId){
-                  var rh = RECEIVE_HDR[rId];
-                  if(!(rh && /void/i.test(rh.status)) && !RECEIVE_BY_MR[mr]){
-                    RECEIVE_BY_MR[mr] = { no: (rObj.PO_receive_No)||(rh&&rh.no)||"", date: rh?rh.date:"" };
+                var rh   = rId ? RECEIVE_HDR[rId] : null;
+                // Apply this allocation's transit/receive/bill to EVERY MR it covers.
+                list.forEach(function(info){
+                  var mr = info.mr; if(!mr) return;
+                  // quantity — count each (MR, SO line) once (avoid per-stage doubling)
+                  var e = ALLOC_BY_MR[mr] || { qty:0, reqQty:0, _seen:{} };
+                  if(!e._seen[info.soKey]){ e.qty += info.qty; e.reqQty += info.reqQty; e._seen[info.soKey] = true; }
+                  ALLOC_BY_MR[mr] = e;
+                  if(tId && TRANSIT_HDR[tId] && !TRANSIT_BY_MR[mr]) TRANSIT_BY_MR[mr] = { no:TRANSIT_HDR[tId].no, date:TRANSIT_HDR[tId].date };
+                  if(rId){
+                    if(!(rh && /void/i.test(rh.status)) && !RECEIVE_BY_MR[mr]){
+                      RECEIVE_BY_MR[mr] = { no: (rObj.PO_receive_No)||(rh&&rh.no)||"", date: rh?rh.date:"" };
+                    }
+                    if(BILL_BY_RCVID[rId] && !BILL_BY_MR[mr]) BILL_BY_MR[mr] = BILL_BY_RCVID[rId];
                   }
-                  if(BILL_BY_RCVID[rId] && !BILL_BY_MR[mr]) BILL_BY_MR[mr] = BILL_BY_RCVID[rId];
-                }
+                });
               });
               PROG.allocations = "✓ item allocs: "+itemN+"; MRs: "+Object.keys(ALLOC_BY_MR).length;
             });
