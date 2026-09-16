@@ -196,7 +196,7 @@
 "use strict";
 
 /* Build marker — bump on each deploy so we can confirm the loaded version. */
-var BUILD = "2026-09-16-v";
+var BUILD = "2026-09-16-w";
 
 /* =========================================================================
    1) CONFIGURATION  — edit ONLY this block once you confirm link names.
@@ -853,16 +853,10 @@ function transformAndRender(D){
     var soNo = lv(r[S.orderNo]);
     var mrHit = MR_MAP[soNo];
     var mrNo  = mrHit ? mrHit.mr : "";
-    var alloc = mrNo ? ALLOC_BY_MR[mrNo] : null;     // per-MR quantities for this item
-    // PO for THIS row's material request; qty = the MR's requested qty (REQ_QTY).
     var poHit = mrNo ? PO_BY_MR[mrNo] : null;
     var poNo   = poHit ? poHit.poNo   : fbPoNo;
     var poDate = poHit ? poHit.poDate : fbPoDate;
-    // PO qty = the qty allocated to THIS MR (fill-bigger-first is already reflected
-    // in the allocation's QTY); the downstream stages carry that same allocated qty.
-    var allocQty = alloc ? alloc.qty : "";
-    var poQty  = alloc ? alloc.qty : fbPoQty;
-    // Transit / Receive / Bill for THIS row's material request (via allocation hub).
+    // Stage documents for THIS row's material request (via allocation hub).
     var trHit   = mrNo ? TRANSIT_BY_MR[mrNo] : null;
     var rcvHit  = mrNo ? RECEIVE_BY_MR[mrNo] : null;
     var billHit = mrNo ? BILL_BY_MR[mrNo]    : null;
@@ -884,16 +878,14 @@ function transformAndRender(D){
       grn: rcvHit ? [rcvHit.no, rcvHit.date] : ["",""],
       bill: billHit ? [billHit.no, billHit.date] : ["",""],
       ordered: ordered,
-      billQty: billHit ? allocQty : 0,     // allocated/billed qty for this MR
       dismissed: 0,
       rate: num(r["RATE"]),
       unit: lv(r[S.unit]) || "box",
       poGroup: poNo || null,
-      poQty: poQty,
-      _hasAlloc: !!alloc,       // true when a real allocation qty exists (skip computed split)
-      mrQty: alloc ? alloc.reqQty : ordered,  // MR requested qty (allocation REQ_QTY; else SO qty before allocation)
-      transitQty: trHit ? allocQty : "",
-      grnQty: rcvHit ? allocQty : "",      // received qty for this MR
+      mrQty: ordered,                       // MR requested qty (= SO line qty)
+      // stage presence (documents exist for this MR); quantities filled after the split
+      _hasTransit: !!(trHit && trHit.no), _hasReceive: !!rcvHit, _hasBill: !!billHit,
+      poQty: 0, transitQty: "", grnQty: "", billQty: 0,
       invoices: rowInv
     };
   });
@@ -901,9 +893,10 @@ function transformAndRender(D){
   // Keep only rows whose Sales Order has a Material Request.
   rows = rows.filter(function(x){ return x.mr && x.mr[0]; });
 
-  // PO quantity split: when Zoho hasn't recorded a per-MR allocation yet, split
-  // each PO's total item quantity across its MR rows, largest request first
-  // (e.g. PO 49 over MR 30 + MR 20 -> 30 and 19).
+  // Quantity allocation: split each PO's total item quantity across its MR rows,
+  // largest request first (PO 50 over MR 30 + MR 20 -> 30 and 20; PO 49 -> 30 and
+  // 19). The SAME allocated quantity then flows to Transit / Receive / Bill for
+  // that MR (shown only where the stage document exists).
   var poTotal = {};
   (D.po||[]).forEach(function(r){
     var pn = lv(r[F.purchaseOrder.fields.poNo]);
@@ -912,15 +905,20 @@ function transformAndRender(D){
   var byPo = {};
   rows.forEach(function(row){ if(row.poGroup){ (byPo[row.poGroup]=byPo[row.poGroup]||[]).push(row); } });
   Object.keys(byPo).forEach(function(pn){
-    var grp = byPo[pn];
-    if(grp.some(function(x){ return x._hasAlloc; })) return;   // real allocation exists — keep it
-    if(poTotal[pn]==null) return;                              // no PO total to split
-    var ordered2 = grp.slice().sort(function(a,b){ return num(b.mrQty) - num(a.mrQty); }); // bigger first
+    if(poTotal[pn]==null) return;                              // no PO -> no allocation
+    var grp = byPo[pn].slice().sort(function(a,b){ return num(b.mrQty) - num(a.mrQty); }); // bigger first
     var remaining = poTotal[pn];
-    ordered2.forEach(function(row){
+    grp.forEach(function(row){
       var give = Math.max(0, Math.min(num(row.mrQty), remaining));
       row.poQty = give; remaining -= give;
     });
+  });
+  // Propagate the allocated quantity to the downstream stages this MR reached.
+  rows.forEach(function(row){
+    var q = row.poQty;
+    row.transitQty = row._hasTransit ? q : "";
+    row.grnQty     = row._hasReceive ? q : "";
+    row.billQty    = row._hasBill    ? q : 0;
   });
 
   STATE.rows = rows;
