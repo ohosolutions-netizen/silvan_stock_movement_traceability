@@ -196,7 +196,7 @@
 "use strict";
 
 /* Build marker — bump on each deploy so we can confirm the loaded version. */
-var BUILD = "2026-09-16-w";
+var BUILD = "2026-09-16-x";
 
 /* =========================================================================
    1) CONFIGURATION  — edit ONLY this block once you confirm link names.
@@ -1069,6 +1069,16 @@ function renderDebug(){
   // Extra discovery reports (sampled, not yet wired into the table).
   SAMPLE_REPORTS.forEach(function(rep){ order.push([rep, rep]); });
   var out="";
+  // Computed MR-keyed joins (diagnostic).
+  out += '<div class="db-rep"><h4>Computed joins (MR-keyed)</h4><div class="db-keys">'+
+    escapeHtml(
+      "MR_MAP (SO -> MR): "+JSON.stringify(MR_MAP)+"\n\n"+
+      "PO_BY_MR: "+JSON.stringify(PO_BY_MR)+"\n\n"+
+      "TRANSIT_BY_MR: "+JSON.stringify(TRANSIT_BY_MR)+"\n\n"+
+      "RECEIVE_BY_MR: "+JSON.stringify(RECEIVE_BY_MR)+"\n\n"+
+      "BILL_BY_MR: "+JSON.stringify(BILL_BY_MR)+"\n\n"+
+      "ALLOC_BY_MR: "+JSON.stringify(ALLOC_BY_MR)
+    )+'</div></div>';
   order.forEach(function(pair){
     var key=pair[0], label=pair[1], recs=RAW[key]||[];
     var repName = (FIELD[key] && FIELD[key].report) ? FIELD[key].report : key;
