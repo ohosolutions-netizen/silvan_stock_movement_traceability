@@ -196,7 +196,7 @@
 "use strict";
 
 /* Build marker — bump on each deploy so we can confirm the loaded version. */
-var BUILD = "2026-09-16-h";
+var BUILD = "2026-09-16-i";
 
 /* =========================================================================
    1) CONFIGURATION  — edit ONLY this block once you confirm link names.
@@ -268,15 +268,18 @@ var FIELD = {
   },
 
   invoice: {
-    report:  "All_Sales_Invoice_Line_Items",
-    itemCode:"ITEM_CODE",                 // confirmed
+    // Invoice HEADER report: has the invoice number, date, SO No, and a Line_Item
+    // subform (ITEM_CODE + QTY). Filter by subform item code; attribute to the SO
+    // row by SO number. Field names below are best-guess pending the debug dump.
+    report:  "API_SALES_INVOICES",
+    itemCode:"Line_Item.ITEM_CODE",       // subform criteria
     fields:{
-      // The report currently exposes only the Sales_Invoice lookup (display = record ID)
-      // and QTY. Add "Invoice Number" + "Date" columns to the report to fill these:
-      invoiceNo:    "Sales_Invoice.Invoice_Number", // add as a report column (optional)
-      invoiceNoLk:  "Sales_Invoice",                 // fallback (currently a record ID)
-      invoiceDate:  "Sales_Invoice.Date_field",      // add as a report column (optional)
-      qty:          "QTY"
+      number:     "Sales_Invoice_No",     // TODO confirm from debug dump
+      date:       "Sales_Invoice_Date",   // TODO confirm from debug dump
+      soRefs:     "Sales_Order_no",        // SO reference (array/obj/string) — soNoFrom() also scans
+      lineItems:  "Line_Item",
+      liItemCode: "ITEM_CODE",
+      liQty:      "QTY"
     }
   },
 
@@ -336,6 +339,33 @@ function money(n){ return "₹"+(Number(n)||0).toLocaleString('en-IN'); }
 // Record ID referenced by a lookup field value ({ID, zc_display_value} | "").
 function lookupId(v){ return (v && typeof v==="object") ? (v.ID || v.id || "") : (typeof v==="string" && /^\d{10,}$/.test(v) ? v : ""); }
 function uniq(a){ return a.filter(function(x,i){ return x && a.indexOf(x)===i; }); }
+
+// Pull an "SO/1234" number out of any value shape (string, lookup object, or a
+// multi-lookup array of lookup objects). Returns "" if none found.
+function extractSoNo(val){
+  if(val==null) return "";
+  if(Array.isArray(val)){ for(var i=0;i<val.length;i++){ var s=extractSoNo(val[i]); if(s) return s; } return ""; }
+  if(typeof val==="object"){
+    if(val.Order_No && /^SO\/\d+/i.test(val.Order_No)) return val.Order_No;
+    var d=lv(val); return /^SO\/\d+/i.test(d)?d:"";
+  }
+  var m=String(val).match(/SO\/\d+/i); return m?m[0]:"";
+}
+// Configured field first, else scan every field for an SO number.
+function soNoFrom(rec, key){
+  var s = key ? extractSoNo(rec[key]) : ""; if(s) return s;
+  for(var k in rec){ s=extractSoNo(rec[k]); if(s) return s; }
+  return "";
+}
+// First non-empty value whose key contains one of `includes` (and none of `excludes`).
+function valueByKeyLike(rec, includes, excludes){
+  for(var k in rec){
+    var low = k.toLowerCase();
+    if(excludes && excludes.some(function(e){ return low.indexOf(e)>-1; })) continue;
+    if(includes.some(function(s){ return low.indexOf(s)>-1; })){ var v = lv(rec[k]); if(v) return v; }
+  }
+  return "";
+}
 
 // A document number: prefer a real report column (subKey), else the lookup's
 // display value — but suppress bare 15+ digit record IDs (they aren't useful).
@@ -550,6 +580,23 @@ function loadItem(code){
       ).then(rerender);
     }
 
+    // Enrichment B2 — invoice fallback: if the subform-criteria invoice fetch
+    // returned nothing, refetch all invoices and filter client-side.
+    if(!core.inv.length){
+      var IFF = FIELD.invoice.fields, codeI = String(code);
+      PROG.invoice = "… (fallback: scanning all invoices)"; paintProgress(code);
+      fetchAll(FIELD.invoice.report, null).then(
+        function(all){
+          var matched = all.filter(function(rec){
+            return (rec[IFF.lineItems]||[]).some(function(li){ return String(lv(li[IFF.liItemCode]))===codeI; });
+          });
+          core.inv = matched; RAW.invoice = matched;
+          PROG.invoice = "✓ "+matched.length+" record(s) (fallback)";
+        },
+        function(e){ PROG.invoice = "✗ "+errToStr(e); console.error("[invoice fallback]", e); }
+      ).then(rerender);
+    }
+
     // Enrichment C — Material Request (header report), joined by SO number.
     // Fetch all MRs and map SO number -> {mr, date} using value patterns.
     PROG.materialRequest="…"; paintProgress(code);
@@ -580,31 +627,34 @@ function loadItem(code){
 function transformAndRender(D){
   var F = FIELD, S = F.salesOrder.fields;
 
-  // Invoices for this item (item-code join). The report exposes only a QTY and a
-  // Sales_Invoice lookup (whose display is a record ID) — docNo() shows a real
-  // number if the report has an Invoice Number column, else nothing useful.
-  var invoices = D.inv.map(function(r){
-    return {
-      no:   docNo(r, F.invoice.fields.invoiceNo, F.invoice.fields.invoiceNoLk),
-      date: lv(r[F.invoice.fields.invoiceDate]),
-      qty:  num(r[F.invoice.fields.qty]),
-      creditNotes:[]
-    };
+  // Invoices from API_SALES_INVOICES: each record has an invoice number, date, an
+  // SO reference, and a Line_Item subform. Keep subform lines for this item and
+  // remember which SO each invoice belongs to (for per-row attribution).
+  var IF = F.invoice.fields, invAll = [];
+  (D.inv||[]).forEach(function(rec){
+    var no   = lv(rec[IF.number]) || valueByKeyLike(rec, ["invoice_no","invoice_number","sales_invoice_no","bill_no"], ["line","item"]);
+    var date = lv(rec[IF.date])   || valueByKeyLike(rec, ["date"], ["added_time","modified","updat"]);
+    var soNo = soNoFrom(rec, IF.soRefs);
+    (rec[IF.lineItems]||[]).forEach(function(li){
+      if(String(lv(li[IF.liItemCode])) === String(STATE.itemCode)){
+        invAll.push({ no:no, date:date, qty:num(li[IF.liQty]), so:soNo, creditNotes:[] });
+      }
+    });
   });
-  // Build credit notes from API_CREDIT_NOTES: each record has CN number + date
-  // and a Line_Item subform; keep only subform lines for the current item code.
+  var invBySo = {}, invNoSo = [];
+  invAll.forEach(function(iv){ if(iv.so){ (invBySo[iv.so]=invBySo[iv.so]||[]).push(iv); } else invNoSo.push(iv); });
+
+  // Credit notes from API_CREDIT_NOTES (item-code join; can't tie to one invoice).
   var CF = F.creditNote.fields, creditNotes = [];
   (D.cn||[]).forEach(function(cnRec){
     var no = lv(cnRec[CF.number]), date = lv(cnRec[CF.date]);
-    var lines = cnRec[CF.lineItems] || [];
-    lines.forEach(function(li){
+    (cnRec[CF.lineItems] || []).forEach(function(li){
       if(String(lv(li[CF.liItemCode])) === String(STATE.itemCode)){
         creditNotes.push({ no:no, date:date, qty:num(li[CF.liQty]) });
       }
     });
   });
-  // Item-code join can't tie a CN to a specific invoice, so group all under the first.
-  if(invoices.length){ creditNotes.forEach(function(c){ invoices[0].creditNotes.push(c); }); }
+  if(invAll.length){ creditNotes.forEach(function(c){ invAll[0].creditNotes.push(c); }); }
 
   // Item-level summaries (first PO / first branch-transfer shown on every line).
   var poNo   = D.po.length ? lv(D.po[0][F.purchaseOrder.fields.poNo])   : "";
@@ -617,6 +667,9 @@ function transformAndRender(D){
     var ordered = num(r[S.orderedQty]);
     var soNo = lv(r[S.orderNo]);
     var mrHit = MR_MAP[soNo];
+    // Invoices for THIS sales order (by SO number); unattributed ones on row 0.
+    var rowInv = (invBySo[soNo] || []).slice();
+    if(i===0) rowInv = rowInv.concat(invNoSo);
     return {
       id: i+1,
       name: ((STATE.itemName || lv(r[S.name]) || "")+"").trim(),
@@ -640,8 +693,7 @@ function transformAndRender(D){
       poQty: poQty,
       mrQty: "",              // MR report is header-level; no per-item qty
       transitQty: btQty,
-      // invoices/credit notes are item-level; show them on the first line only
-      invoices: i===0 ? invoices : []
+      invoices: rowInv
     };
   });
 
