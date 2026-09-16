@@ -196,7 +196,7 @@
 "use strict";
 
 /* Build marker — bump on each deploy so we can confirm the loaded version. */
-var BUILD = "2026-09-16-o";
+var BUILD = "2026-09-16-p";
 
 /* =========================================================================
    1) CONFIGURATION  — edit ONLY this block once you confirm link names.
@@ -865,6 +865,9 @@ function transformAndRender(D){
       invoices: rowInv
     };
   });
+
+  // Keep only rows whose Sales Order has a Material Request.
+  rows = rows.filter(function(x){ return x.mr && x.mr[0]; });
 
   STATE.rows = rows;
 
