@@ -196,7 +196,7 @@
 "use strict";
 
 /* Build marker — bump on each deploy so we can confirm the loaded version. */
-var BUILD = "2026-09-16-e";
+var BUILD = "2026-09-16-f";
 
 /* =========================================================================
    1) CONFIGURATION  — edit ONLY this block once you confirm link names.
@@ -396,6 +396,20 @@ function withTimeout(p, ms, label){
 
 function delay(ms){ return new Promise(function(r){ setTimeout(r, ms); }); }
 
+// Zoho signals "no matching records" as an error (code 3100 or 9280, the latter
+// as an HTTP 400 with the code nested in responseText). That's an empty result,
+// not a failure — detect it so we don't error or retry.
+function isNoRecords(err){
+  if(!err) return false;
+  var c = err.code;
+  if(c===3100||c==="3100"||c===9280||c==="9280") return true;
+  var t = "";
+  try{ t = (err.responseText||"") + " " + (err.message||""); }catch(_){}
+  if(/"code"\s*:\s*(3100|9280)/.test(t)) return true;
+  if(/no records found/i.test(t)) return true;
+  return false;
+}
+
 function fetchAll(reportName, criteria){
   var out = [];
   function grab(page, attempt){
@@ -408,8 +422,7 @@ function fetchAll(reportName, criteria){
       return out;
     })
     .catch(function(err){
-      // "no records" is not a real error — return what we have.
-      if(err && (err.code===3100 || err.code==="3100")) return out;
+      if(isNoRecords(err)) return out;   // empty result, not an error
       // transient error (rate limit / hiccup): back off and retry a couple of times.
       if(attempt < 3){
         console.warn("["+reportName+"] attempt "+attempt+" failed, retrying:", err);
@@ -431,7 +444,7 @@ function eqCriteria(field, val){
 function fetchPage1(reportName, criteria){
   return withTimeout(callGetRecords(reportName, criteria, 1), FETCH_TIMEOUT_MS, reportName)
     .then(function(resp){ return (resp && resp.data) ? resp.data : []; })
-    .catch(function(err){ if(err && (err.code===3100||err.code==="3100")) return []; throw err; });
+    .catch(function(err){ if(isNoRecords(err)) return []; throw err; });
 }
 
 /* =========================================================================
