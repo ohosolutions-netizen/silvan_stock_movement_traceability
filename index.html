@@ -196,7 +196,7 @@
 "use strict";
 
 /* Build marker — bump on each deploy so we can confirm the loaded version. */
-var BUILD = "2026-09-16-c";
+var BUILD = "2026-09-16-d";
 
 /* =========================================================================
    1) CONFIGURATION  — edit ONLY this block once you confirm link names.
@@ -465,14 +465,18 @@ function loadItem(code){
   paintProgress(code);
 
   var results = {};
-  var jobs = specs.map(function(s){
+  // Fetch the core reports SEQUENTIALLY. Zoho's data API rejects too many
+  // concurrent getRecords calls (some fail with a bare error), so we chain them.
+  function runSeq(i){
+    if(i >= specs.length) return Promise.resolve();
+    var s = specs[i];
     return fetchAll(s[1], s[2]).then(
       function(d){ results[s[0]]=d; RAW[s[0]]=d; PROG[s[0]]="✓ "+d.length+" record(s)"; paintProgress(code); },
       function(e){ results[s[0]]=[]; RAW[s[0]]=[]; PROG[s[0]]="✗ "+((e&&(e.message||e.code))||"error"); paintProgress(code); console.error("["+s[1]+"]", e); }
-    );
-  });
+    ).then(function(){ return runSeq(i+1); });
+  }
 
-  Promise.all(jobs).then(function(){
+  runSeq(0).then(function(){
     var core = {
       itemMaster:results.itemMaster||[], so:results.salesOrder||[], po:results.purchaseOrder||[],
       inv:results.invoice||[], cn:results.creditNote||[], mr:results.materialRequest||[]
