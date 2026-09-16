@@ -196,7 +196,7 @@
 "use strict";
 
 /* Build marker — bump on each deploy so we can confirm the loaded version. */
-var BUILD = "2026-09-16-j";
+var BUILD = "2026-09-16-k";
 
 /* =========================================================================
    1) CONFIGURATION  — edit ONLY this block once you confirm link names.
@@ -305,6 +305,7 @@ var PAGE_SIZE = 200; // Creator max per page for getAllRecords
 // and console — not yet wired into the table. Used to design the transit match:
 // Purchase Transit -> Line items -> Material Allocations -> MR Allocation subform -> QTY.
 var SAMPLE_REPORTS = [
+  "Purchase_Order_Report",        // PO header: has Material Request No + line items
   "API_PURCHASE_TRANSIT",
   "All_Material_Request_Allocations",
   "MATERIAL_REQUEST_ALLOCATION_SUBFORM_Report"
