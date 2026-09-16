@@ -196,7 +196,7 @@
 "use strict";
 
 /* Build marker — bump on each deploy so we can confirm the loaded version. */
-var BUILD = "2026-09-16-s";
+var BUILD = "2026-09-16-t";
 
 /* =========================================================================
    1) CONFIGURATION  — edit ONLY this block once you confirm link names.
@@ -910,6 +910,7 @@ function transformAndRender(D){
       unit: lv(r[S.unit]) || "box",
       poGroup: poNo || null,
       poQty: poQty,
+      _hasAlloc: !!alloc,       // true when a real allocation qty exists (skip computed split)
       mrQty: alloc ? alloc.reqQty : ordered,  // MR requested qty (allocation REQ_QTY; else SO qty before allocation)
       transitQty: trHit ? trHit.qty : "",
       grnQty: allocQty,                    // received qty for this MR
@@ -919,6 +920,28 @@ function transformAndRender(D){
 
   // Keep only rows whose Sales Order has a Material Request.
   rows = rows.filter(function(x){ return x.mr && x.mr[0]; });
+
+  // PO quantity split: when Zoho hasn't recorded a per-MR allocation yet, split
+  // each PO's total item quantity across its MR rows, largest request first
+  // (e.g. PO 49 over MR 30 + MR 20 -> 30 and 19).
+  var poTotal = {};
+  (D.po||[]).forEach(function(r){
+    var pn = lv(r[F.purchaseOrder.fields.poNo]);
+    if(pn) poTotal[pn] = (poTotal[pn]||0) + num(r[F.purchaseOrder.fields.qty]);
+  });
+  var byPo = {};
+  rows.forEach(function(row){ if(row.poGroup){ (byPo[row.poGroup]=byPo[row.poGroup]||[]).push(row); } });
+  Object.keys(byPo).forEach(function(pn){
+    var grp = byPo[pn];
+    if(grp.some(function(x){ return x._hasAlloc; })) return;   // real allocation exists — keep it
+    if(poTotal[pn]==null) return;                              // no PO total to split
+    var ordered2 = grp.slice().sort(function(a,b){ return num(b.mrQty) - num(a.mrQty); }); // bigger first
+    var remaining = poTotal[pn];
+    ordered2.forEach(function(row){
+      var give = Math.max(0, Math.min(num(row.mrQty), remaining));
+      row.poQty = give; remaining -= give;
+    });
+  });
 
   STATE.rows = rows;
 
