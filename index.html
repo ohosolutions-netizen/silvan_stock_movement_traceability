@@ -196,7 +196,7 @@
 "use strict";
 
 /* Build marker — bump on each deploy so we can confirm the loaded version. */
-var BUILD = "2026-09-16-a";
+var BUILD = "2026-09-16-b";
 
 /* =========================================================================
    1) CONFIGURATION  — edit ONLY this block once you confirm link names.
@@ -268,24 +268,18 @@ var FIELD = {
     }
   },
 
+  // Credit notes come from the HEADER report, which carries the CN number + date
+  // and an inline Line_Item subform (ITEM_CODE + QTY). We filter by the subform
+  // item code and read each matching line — no fragile line-item join needed.
   creditNote: {
-    report:  "Credit_Note_Line_Items_Report",
-    itemCode:"ITEM_CODE",                 // confirmed
-    fields:{
-      cnNo:   "Credit_Note.CreditNote_Number", // add as a report column (optional)
-      cnNoLk: "Credit_Note",                    // lookup to the CN header (join key = its .ID)
-      cnDate: "Credit_Note.Date_field",         // add as a report column (optional)
-      qty:    "QTY"
-    }
-  },
-
-  // Credit Note HEADER report — used to look up the CN date/number by matching
-  // the credit-note record ID referenced from each line item.
-  creditNoteHeader: {
     report:  "API_CREDIT_NOTES",
+    itemCode:"Line_Item.ITEM_CODE",       // subform field criteria
     fields:{
-      date:   "Date_field",   // TODO confirm from debug dump
-      number: "Order_No"      // TODO confirm from debug dump
+      number:     "Credit_No",            // "CN/99"
+      date:       "Credit_Note_Date",     // "16-Sep-2026"
+      lineItems:  "Line_Item",            // subform array
+      liItemCode: "ITEM_CODE",            // within a Line_Item
+      liQty:      "QTY"                   // within a Line_Item
     }
   }
 };
@@ -487,25 +481,22 @@ function loadItem(code){
       function(e){ RAW.batchTransfer=[]; PROG.batchTransfer="✗ "+((e&&(e.message||e.code))||"error"); console.error("[batchTransfer]", e); }
     ).then(rerender);
 
-    // Enrichment B — Credit Note dates/numbers from API_CREDIT_NOTES, matched by
-    // the credit-note record ID referenced on each line item.
-    var cnIds = uniq((core.cn||[]).map(function(r){ return lookupId(r[FIELD.creditNote.fields.cnNoLk]); }));
-    CN_HDR = {};
-    if(cnIds.length){
-      PROG.creditNoteHeader="… ("+cnIds.length+" ids)";
-      var crit = "(" + cnIds.map(function(id){ return 'ID == "'+id+'"'; }).join(" || ") + ")";
-      fetchAll(FIELD.creditNoteHeader.report, crit).then(
-        function(h){ RAW.creditNoteHeader=h; h.forEach(function(x){ CN_HDR[lv(x.ID)]=x; }); PROG.creditNoteHeader="✓ "+h.length+" record(s)"; },
-        function(e){ RAW.creditNoteHeader=[]; PROG.creditNoteHeader="✗ "+((e&&(e.message||e.code))||"error"); console.error("[creditNoteHeader]", e); }
+    // Enrichment B — if the subform-criteria credit-note fetch returned nothing
+    // (some SDKs don't support subform-field criteria), refetch all credit notes
+    // and filter client-side by the Line_Item item code.
+    if(!core.cn.length){
+      var CF = FIELD.creditNote.fields, code2 = String(code);
+      PROG.creditNote = "… (fallback: scanning all credit notes)"; paintProgress(code);
+      fetchAll(FIELD.creditNote.report, null).then(
+        function(all){
+          var matched = all.filter(function(rec){
+            return (rec[CF.lineItems]||[]).some(function(li){ return String(lv(li[CF.liItemCode]))===code2; });
+          });
+          core.cn = matched; RAW.creditNote = matched;
+          PROG.creditNote = "✓ "+matched.length+" record(s) (fallback)";
+        },
+        function(e){ PROG.creditNote = "✗ "+((e&&(e.message||e.code))||"error"); console.error("[creditNote fallback]", e); }
       ).then(rerender);
-    } else {
-      // Line items carry no CN id — sample the header report so we can see its
-      // fields and figure out the correct join key.
-      PROG.creditNoteHeader="✗ no CN id on line items (sampling header)";
-      fetchPage1(FIELD.creditNoteHeader.report, null).then(
-        function(h){ RAW.creditNoteHeader=h; PROG.creditNoteHeader="⚠ header has "+h.length+" sample rows; line items lack CN id"; },
-        function(e){ RAW.creditNoteHeader=[]; PROG.creditNoteHeader="✗ header sample "+((e&&(e.message||e.code))||"error"); console.error("[creditNoteHeader sample]", e); }
-      ).then(renderDebug);
     }
   });
 }
@@ -528,13 +519,17 @@ function transformAndRender(D){
       creditNotes:[]
     };
   });
-  var creditNotes = D.cn.map(function(r){
-    var hdr = CN_HDR[ lookupId(r[F.creditNote.fields.cnNoLk]) ];
-    return {
-      no:   docNo(r, F.creditNote.fields.cnNo, F.creditNote.fields.cnNoLk) || (hdr? lv(hdr[F.creditNoteHeader.fields.number]) : ""),
-      date: lv(r[F.creditNote.fields.cnDate]) || (hdr? lv(hdr[F.creditNoteHeader.fields.date]) : ""),
-      qty:  num(r[F.creditNote.fields.qty])
-    };
+  // Build credit notes from API_CREDIT_NOTES: each record has CN number + date
+  // and a Line_Item subform; keep only subform lines for the current item code.
+  var CF = F.creditNote.fields, creditNotes = [];
+  (D.cn||[]).forEach(function(cnRec){
+    var no = lv(cnRec[CF.number]), date = lv(cnRec[CF.date]);
+    var lines = cnRec[CF.lineItems] || [];
+    lines.forEach(function(li){
+      if(String(lv(li[CF.liItemCode])) === String(STATE.itemCode)){
+        creditNotes.push({ no:no, date:date, qty:num(li[CF.liQty]) });
+      }
+    });
   });
   // Item-code join can't tie a CN to a specific invoice, so group all under the first.
   if(invoices.length){ creditNotes.forEach(function(c){ invoices[0].creditNotes.push(c); }); }
@@ -721,7 +716,7 @@ function render(){
    7) DEBUG / FIELD DISCOVERY panel
    ========================================================================= */
 function renderDebug(){
-  var order=[["itemMaster","Item Master"],["salesOrder","Sales Order item-wise"],["purchaseOrder","PO item-wise"],["batchTransfer","Batch Transfer"],["invoice","Sales Invoice"],["creditNote","Credit Note (line items)"],["creditNoteHeader","Credit Note HEADER (API_CREDIT_NOTES)"]];
+  var order=[["itemMaster","Item Master"],["salesOrder","Sales Order item-wise"],["purchaseOrder","PO item-wise"],["batchTransfer","Batch Transfer"],["invoice","Sales Invoice"],["creditNote","Credit Note (API_CREDIT_NOTES)"]];
   var out="";
   order.forEach(function(pair){
     var key=pair[0], label=pair[1], recs=RAW[key]||[];
