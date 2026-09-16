@@ -196,7 +196,7 @@
 "use strict";
 
 /* Build marker — bump on each deploy so we can confirm the loaded version. */
-var BUILD = "2026-09-16-k";
+var BUILD = "2026-09-16-l";
 
 /* =========================================================================
    1) CONFIGURATION  — edit ONLY this block once you confirm link names.
@@ -256,6 +256,18 @@ var FIELD = {
     }
   },
 
+  // PO HEADER report. One PO can be built from several Material Requests, so the
+  // per-MR quantity lives in each PO line item's Material_Request_Line_items
+  // subform. We match by MR number and read that MR's quantity for our item.
+  purchaseOrderHeader: {
+    report:  "Purchase_Order_Report",
+    fields:{
+      poNo:      "Order_No",                      // "PO/356"
+      itemCode:  "ITEMCODE",                      // within a PO line item
+      mrLine:    "Material_Request_Line_items"    // subform of MR allocations (MR ref + QTY)
+    }
+  },
+
   batchTransfer: {                        // inter-branch "transit" movement
     report:  "All_Batch_Transfer_Line_Items",
     // The item is the lookup "Item" (no plain item-code column). Filter by the
@@ -305,7 +317,6 @@ var PAGE_SIZE = 200; // Creator max per page for getAllRecords
 // and console — not yet wired into the table. Used to design the transit match:
 // Purchase Transit -> Line items -> Material Allocations -> MR Allocation subform -> QTY.
 var SAMPLE_REPORTS = [
-  "Purchase_Order_Report",        // PO header: has Material Request No + line items
   "API_PURCHASE_TRANSIT",
   "All_Material_Request_Allocations",
   "MATERIAL_REQUEST_ALLOCATION_SUBFORM_Report"
@@ -367,6 +378,23 @@ function soNoFrom(rec, key){
   for(var k in rec){ s=extractSoNo(rec[k]); if(s) return s; }
   return "";
 }
+// Pull an "MR/079" number out of any value shape.
+function extractMrNo(val){
+  if(val==null) return "";
+  if(Array.isArray(val)){ for(var i=0;i<val.length;i++){ var s=extractMrNo(val[i]); if(s) return s; } return ""; }
+  if(typeof val==="object"){ var d=lv(val); var m=d.match(/MR\/\d+/i); return m?m[0]:""; }
+  var mm=String(val).match(/MR\/\d+/i); return mm?mm[0]:"";
+}
+function mrNoFrom(rec){ for(var k in rec){ var s=extractMrNo(rec[k]); if(s) return s; } return ""; }
+// The subform array in a record whose elements carry an item code (PO line items).
+function findLineItems(rec){
+  for(var k in rec){
+    var v=rec[k];
+    if(Array.isArray(v) && v.length && (v[0].ITEMCODE!==undefined || v[0].ITEM_CODE!==undefined || v[0].Item_Code!==undefined)) return v;
+  }
+  return [];
+}
+
 // First non-empty value whose key contains one of `includes` (and none of `excludes`).
 function valueByKeyLike(rec, includes, excludes){
   for(var k in rec){
@@ -490,6 +518,7 @@ function fetchPage1(reportName, criteria){
 var RAW = {};   // last raw responses, for the debug panel
 var CN_HDR = {};// credit-note header records keyed by record ID (id -> record)
 var MR_MAP = {};// SO number -> {mr, date} from the Material Request report
+var PO_BY_MR = {};// MR number -> {poNo, poDate, qty} from the PO header report
 var STATE = { view:"product", itemCode:"", itemName:"", rows:[] };
 
 // Extract SO number, MR number and date from a Material Request record by value
@@ -607,6 +636,38 @@ function loadItem(code){
       ).then(rerender);
     }
 
+    // Enrichment B3 — PO per MR: fetch the PO header report for the PO numbers
+    // that involve this item, and map MR number -> {poNo, poDate, qty} from each
+    // PO line item's Material_Request_Line_items subform.
+    PO_BY_MR = {};
+    var PHF = FIELD.purchaseOrderHeader.fields;
+    var poNos = uniq((core.po||[]).map(function(r){ return lv(r[FIELD.purchaseOrder.fields.poNo]); }));
+    if(poNos.length){
+      PROG.purchaseOrderHeader="…"; paintProgress(code);
+      var poCrit = "(" + poNos.map(function(n){ return PHF.poNo+' == "'+n+'"'; }).join(" || ") + ")";
+      fetchAll(FIELD.purchaseOrderHeader.report, poCrit).then(
+        function(all){
+          RAW.purchaseOrderHeader = all;
+          all.forEach(function(po){
+            var poNo = lv(po[PHF.poNo]);
+            var poDate = valueByKeyLike(po, ["date"], ["added_time","modified","updat"]);
+            findLineItems(po).forEach(function(li){
+              var ic = String(lv(li[PHF.itemCode] || li.ITEMCODE || li.ITEM_CODE || li.Item_Code));
+              if(ic !== String(code)) return;              // only this item's line
+              var mrls = li[PHF.mrLine]; var list = Array.isArray(mrls)?mrls:(mrls?[mrls]:[]);
+              list.forEach(function(m){
+                var mrNo = mrNoFrom(m);
+                var q = num(m.QTY!=null ? m.QTY : valueByKeyLike(m, ["qty","quantity"], ["balance","rem"]));
+                if(mrNo) PO_BY_MR[mrNo] = { poNo:poNo, poDate:poDate, qty:q };
+              });
+            });
+          });
+          PROG.purchaseOrderHeader = "✓ "+all.length+" record(s); MRs mapped: "+Object.keys(PO_BY_MR).length;
+        },
+        function(e){ RAW.purchaseOrderHeader=[]; PROG.purchaseOrderHeader="✗ "+errToStr(e); console.error("[purchaseOrderHeader]", e); }
+      ).then(rerender);
+    }
+
     // Enrichment C — Material Request (header report), joined by SO number.
     // Fetch all MRs and map SO number -> {mr, date} using value patterns.
     PROG.materialRequest="…"; paintProgress(code);
@@ -682,10 +743,10 @@ function transformAndRender(D){
   });
   if(invAll.length){ creditNotes.forEach(function(c){ invAll[0].creditNotes.push(c); }); }
 
-  // Item-level summaries (first PO / first branch-transfer shown on every line).
-  var poNo   = D.po.length ? lv(D.po[0][F.purchaseOrder.fields.poNo])   : "";
-  var poDate = D.po.length ? lv(D.po[0][F.purchaseOrder.fields.poDate]) : "";
-  var poQty  = D.po.reduce(function(a,r){ return a+num(r[F.purchaseOrder.fields.qty]); },0);
+  // PO fallback (item-level, first PO) used only when a row's MR has no PO match.
+  var fbPoNo   = D.po.length ? lv(D.po[0][F.purchaseOrder.fields.poNo])   : "";
+  var fbPoDate = D.po.length ? lv(D.po[0][F.purchaseOrder.fields.poDate]) : "";
+  var fbPoQty  = D.po.length ? num(D.po[0][F.purchaseOrder.fields.qty])   : 0;
   var btNo   = D.bt.length ? lv(D.bt[0][F.batchTransfer.fields.request]) : "";
   var btQty  = D.bt.reduce(function(a,r){ return a+num(r[F.batchTransfer.fields.transferQty]); },0);
 
@@ -693,6 +754,12 @@ function transformAndRender(D){
     var ordered = num(r[S.orderedQty]);
     var soNo = lv(r[S.orderNo]);
     var mrHit = MR_MAP[soNo];
+    var mrNo  = mrHit ? mrHit.mr : "";
+    // PO for THIS row's material request (qty = that MR's allocation); else fallback.
+    var poHit = mrNo ? PO_BY_MR[mrNo] : null;
+    var poNo   = poHit ? poHit.poNo   : fbPoNo;
+    var poDate = poHit ? poHit.poDate : fbPoDate;
+    var poQty  = poHit ? poHit.qty    : fbPoQty;
     // Invoices for THIS sales order (by SO number); unattributed ones on row 0.
     var rowInv = (invBySo[soNo] || []).slice();
     if(i===0) rowInv = rowInv.concat(invNoSo);
@@ -869,7 +936,7 @@ function render(){
    7) DEBUG / FIELD DISCOVERY panel
    ========================================================================= */
 function renderDebug(){
-  var order=[["itemMaster","Item Master"],["salesOrder","Sales Order item-wise"],["materialRequest","Material Request"],["purchaseOrder","PO item-wise"],["batchTransfer","Batch Transfer"],["invoice","Sales Invoice (API_SALES_INVOICES)"],["creditNote","Credit Note (API_CREDIT_NOTES)"]];
+  var order=[["itemMaster","Item Master"],["salesOrder","Sales Order item-wise"],["materialRequest","Material Request"],["purchaseOrder","PO item-wise"],["purchaseOrderHeader","PO header (Purchase_Order_Report)"],["batchTransfer","Batch Transfer"],["invoice","Sales Invoice (API_SALES_INVOICES)"],["creditNote","Credit Note (API_CREDIT_NOTES)"]];
   // Extra discovery reports (sampled, not yet wired into the table).
   SAMPLE_REPORTS.forEach(function(rep){ order.push([rep, rep]); });
   var out="";
