@@ -63,7 +63,7 @@
   .table-card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden}
   .table-scroll{overflow-x:auto}
   table{width:100%;border-collapse:collapse}
-  #tbl.lines-view{min-width:2540px}
+  #tbl.lines-view{min-width:2760px}
   thead th{background:var(--surface-2);text-align:left;font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;padding:9px 11px;border-bottom:1px solid var(--line);white-space:nowrap;vertical-align:middle;position:sticky;top:0}
   thead th.num{text-align:right}
   thead th.grp{text-align:center;background:#E9EEF3;border-left:2px solid var(--line);color:var(--ink-2);font-size:10.5px}
@@ -196,7 +196,7 @@
 "use strict";
 
 /* Build marker — bump on each deploy so we can confirm the loaded version. */
-var BUILD = "2026-09-16-q";
+var BUILD = "2026-09-16-r";
 
 /* =========================================================================
    1) CONFIGURATION  — edit ONLY this block once you confirm link names.
@@ -279,6 +279,10 @@ var FIELD = {
   // subform (ITEM_CODE + RCVDQTY). Joined to a row by its PO number.
   bill: { report:"API_of_BILLS", fields:{ no:"Bill_No", date:"BilDate", po:"Purchase_Order_No", lineItems:"Line_Item_Bill", liItemCode:"ITEM_CODE", liQty:"RCVDQTY" } },
 
+  // Purchase Receive header. Joined to a row by PO number. Field names are read
+  // flexibly (PR/… number, date, PO link, line items) since not yet confirmed.
+  purchaseReceive: { report:"API_PURCHASE_RECEIVE", fields:{ po:"Purchase_Order_No" } },
+
   batchTransfer: {                        // inter-branch "transit" movement
     report:  "All_Batch_Transfer_Line_Items",
     // The item is the lookup "Item" (no plain item-code column). Filter by the
@@ -327,7 +331,7 @@ var PAGE_SIZE = 200; // Creator max per page for getAllRecords
 // Reports sampled purely to inspect their (nested) structure in the debug panel
 // and console — not yet wired into the table. Used to design the transit match:
 // Purchase Transit -> Line items -> Material Allocations -> MR Allocation subform -> QTY.
-var SAMPLE_REPORTS = []; // (all structures known and wired)
+var SAMPLE_REPORTS = ["purchase_receives_Line_Item_Report"]; // sampled for confirming receive fields
 
 /* =========================================================================
    2) SMALL HELPERS
@@ -393,6 +397,20 @@ function extractMrNo(val){
   var mm=String(val).match(/MR\/\d+/i); return mm?mm[0]:"";
 }
 function mrNoFrom(rec){ for(var k in rec){ var s=extractMrNo(rec[k]); if(s) return s; } return ""; }
+// Generic: pull the first value matching `re` out of any value shape / a record.
+function extractDoc(val, re){
+  if(val==null) return "";
+  if(Array.isArray(val)){ for(var i=0;i<val.length;i++){ var s=extractDoc(val[i],re); if(s) return s; } return ""; }
+  if(typeof val==="object"){ var d=lv(val); var m=d.match(re); return m?m[0]:""; }
+  var mm=String(val).match(re); return mm?mm[0]:"";
+}
+function findByRegex(rec, re){ for(var k in rec){ var s=extractDoc(rec[k],re); if(s) return s; } return ""; }
+function poNoFromRec(rec, key){
+  var v = key ? rec[key] : null;
+  if(v && typeof v==="object"){ var d=lv(v.Order_No||v.zc_display_value); if(d) return d; }
+  else if(v){ var s=lv(v); if(/^PO\/\d+/i.test(s)) return s; }
+  return findByRegex(rec, /PO\/\d+/i);
+}
 // The subform array in a record whose elements carry an item code (PO line items).
 function findLineItems(rec){
   for(var k in rec){
@@ -529,6 +547,7 @@ var PO_BY_MR = {};// MR number -> {poNo, poDate} from the PO header report
 var ALLOC_BY_MR = {};// MR number -> {qty, reqQty, allocIds:[]} for THIS item
 var TRANSIT_BY_MR = {};// MR number -> {no, date, qty} for THIS item
 var BILL_BY_PO = {};// PO number -> {no, date, qty} for THIS item
+var RECEIVE_BY_PO = {};// PO number -> {no, date} for THIS item
 var STATE = { view:"product", itemCode:"", itemName:"", rows:[] };
 
 // Extract SO number, MR number and date from a Material Request record by value
@@ -658,6 +677,7 @@ function loadItem(code){
         function(all){
           RAW.purchaseOrderHeader = all;
           all.forEach(function(po){
+            if(/void/i.test(lv(po.PO_Status))) return;   // skip void POs
             var poNo = lv(po[PHF.poNo]), poDate = lv(po[PHF.poDate]);
             var mrs = po[PHF.mrField]; var list = Array.isArray(mrs)?mrs:(mrs?[mrs]:[]);
             list.forEach(function(m){
@@ -739,6 +759,29 @@ function loadItem(code){
         PROG.bill = "✓ "+bills.length+" record(s); POs billed: "+Object.keys(BILL_BY_PO).length;
       },
       function(e){ RAW.bill=[]; PROG.bill="✗ "+errToStr(e); console.error("[bill]", e); }
+    ).then(rerender);
+
+    // Enrichment G — Purchase Receive: join API_PURCHASE_RECEIVE by PO number.
+    // Skip void receives. Read the PR/… number, a date, and confirm our item.
+    RECEIVE_BY_PO = {};
+    PROG.purchaseReceive="…"; paintProgress(code);
+    fetchAll(FIELD.purchaseReceive.report, null).then(
+      function(recs){
+        RAW.purchaseReceive = recs;
+        recs.forEach(function(rc){
+          if(/void/i.test(lv(rc.Status) || lv(rc.PR_Status) || lv(rc.Receive_Status))) return; // skip void
+          var poNo = poNoFromRec(rc, FIELD.purchaseReceive.fields.po);
+          if(!poNo) return;
+          var recNo = findByRegex(rc, /PR\/\d+/i) || lv(rc.PO_receive_No) || lv(rc.Order_No);
+          var date  = valueByKeyLike(rc, ["date"], ["added_time","modified","updat","inv_date"]);
+          // keep only receives that include our item (if line items are present)
+          var has=false;
+          findLineItems(rc).forEach(function(li){ if(String(lv(li.ITEM_CODE||li.ITEMCODE))===String(code)) has=true; });
+          if(has || !findLineItems(rc).length) RECEIVE_BY_PO[poNo] = { no:recNo, date:date };
+        });
+        PROG.purchaseReceive = "✓ "+recs.length+" record(s); POs received: "+Object.keys(RECEIVE_BY_PO).length;
+      },
+      function(e){ RAW.purchaseReceive=[]; PROG.purchaseReceive="✗ "+errToStr(e); console.error("[purchaseReceive]", e); }
     ).then(rerender);
 
     // Enrichment C — Material Request (header report), joined by SO number.
@@ -834,10 +877,14 @@ function transformAndRender(D){
     var poHit = mrNo ? PO_BY_MR[mrNo] : null;
     var poNo   = poHit ? poHit.poNo   : fbPoNo;
     var poDate = poHit ? poHit.poDate : fbPoDate;
-    var poQty  = alloc ? alloc.reqQty : fbPoQty;
+    // PO qty = the qty allocated to THIS MR (fill-bigger-first is already reflected
+    // in the allocation's QTY); the downstream stages carry that same allocated qty.
+    var allocQty = alloc ? alloc.qty : "";
+    var poQty  = alloc ? alloc.qty : fbPoQty;
     // Transit for THIS row's material request (allocated/received qty).
     var trHit  = mrNo ? TRANSIT_BY_MR[mrNo] : null;
-    // Bill for THIS row's PO (bill is a PO-level document).
+    // Purchase Receive + Bill for THIS row's PO (PO-level documents).
+    var rcvHit  = poNo ? RECEIVE_BY_PO[poNo] : null;
     var billHit = poNo ? BILL_BY_PO[poNo] : null;
     // Invoices for THIS sales order (by SO number); unattributed ones on row 0.
     var rowInv = (invBySo[soNo] || []).slice();
@@ -854,17 +901,18 @@ function transformAndRender(D){
       mr: mrHit ? [mrHit.mr, mrHit.date] : ["",""],
       po: poNo ? [poNo, poDate] : ["",""],
       transit: (trHit && trHit.no) ? [trHit.no, trHit.date, "received"] : ["","",""],
-      grn:["",""],
+      grn: rcvHit ? [rcvHit.no, rcvHit.date] : ["",""],
       bill: billHit ? [billHit.no, billHit.date] : ["",""],
       ordered: ordered,
-      billQty: billHit ? billHit.qty : 0,  // received/billed qty for this item on the PO
-      dismissed: 0,                        // no dismissed column in report
+      billQty: billHit ? (alloc ? alloc.qty : billHit.qty) : 0,  // allocated/billed qty for this MR
+      dismissed: 0,
       rate: num(r["RATE"]),
       unit: lv(r[S.unit]) || "box",
       poGroup: poNo || null,
       poQty: poQty,
       mrQty: alloc ? alloc.reqQty : "",   // MR requested qty (from allocation)
       transitQty: trHit ? trHit.qty : "",
+      grnQty: allocQty,                    // received qty for this MR
       invoices: rowInv
     };
   });
@@ -929,21 +977,21 @@ function renderLines(list){
      '<th colspan="3" class="grp">Material Request</th>'+
      '<th colspan="3" class="grp">Purchase Order</th>'+
      '<th colspan="3" class="grp">Purchase Transit</th>'+
+     '<th colspan="3" class="grp">Purchase Receives</th>'+
      '<th colspan="3" class="grp">Bill</th>'+
      '<th rowspan="2" class="num vsep">Balance</th>'+
      '<th colspan="3" class="grp">Invoice</th>'+
-     '<th rowspan="2" class="num vsep">Dismissed</th>'+
-     '<th rowspan="2" class="num">Remaining</th>'+
+     '<th rowspan="2" class="num vsep">Remaining</th>'+
      '<th colspan="3" class="grp">Credit Note</th>'+
      '<th rowspan="2" class="vsep">Status</th>'+
    '</tr>'+
-   '<tr class="subhead">'+Array(7).fill('<th class="gstart">Date</th><th>No.</th><th class="num">Qty</th>').join('')+'</tr>';
+   '<tr class="subhead">'+Array(8).fill('<th class="gstart">Date</th><th>No.</th><th class="num">Qty</th>').join('')+'</tr>';
 
   var html="";
   list.forEach(function(r,li){
     var invs=r.invoices||[];
     var bal=r.ordered - r.billQty;
-    var rem=r.ordered - invTotal(r) - r.dismissed;
+    var rem=r.ordered - invTotal(r);
     var returns=retTotal(r);
     var st=stageOf(r), bc=badgeClass[st];
     var retFlag = returns>0?'<span class="flag f-ret">Return '+returns+'</span>':"";
@@ -963,13 +1011,12 @@ function renderLines(list){
         tds += '<td'+RS+'><div class="item-name">'+r.name+'</div><div class="item-code mono">'+r.code+'</div></td>'+
           '<td'+RS+'><div class="branch-pill"><span class="branch-dot"></span>'+r.branch+'</div><div class="sub-mut">'+(r.customer||"")+'</div></td>'+
           '<td'+RS+'><span class="sm">'+r.salesman+'</span></td>'+
-          dnq(r.so,r.ordered,T)+dnq(r.mr,r.mrQty,T)+dnq(r.po,r.poQty,T)+dnq(r.transit,r.transitQty,T)+dnq(r.bill,r.billQty,T)+
+          dnq(r.so,r.ordered,T)+dnq(r.mr,r.mrQty,T)+dnq(r.po,r.poQty,T)+dnq(r.transit,r.transitQty,T)+dnq(r.grn,r.grnQty,T)+dnq(r.bill,r.billQty,T)+
           '<td class="num vsep"'+RS+'><span class="bal '+(bal>0?'open-b':'zero-b')+'">'+bal+'</span></td>';
       }
       if(p.invFirst) tds += invCells(p.iv, p.invRS);
       if(idx===0){
-        tds += '<td class="num vsep"'+RS+'><span class="qy" style="'+(r.dismissed>0?'color:var(--dead);font-weight:700':'color:var(--muted)')+'">'+r.dismissed+'</span></td>'+
-          '<td class="num"'+RS+'><span class="bal '+(rem>0?'open-b':'zero-b')+'">'+rem+'</span></td>';
+        tds += '<td class="num vsep"'+RS+'><span class="bal '+(rem>0?'open-b':'zero-b')+'">'+rem+'</span></td>';
       }
       tds += cnCells(p.cn);
       if(idx===0) tds += '<td class="vsep"'+RS+'><span class="badge '+bc+'"><span class="d"></span>'+st+'</span>'+retFlag+'</td>';
@@ -983,15 +1030,14 @@ function renderProduct(list){
   $('tbl').className='product-view';
   $('thead').innerHTML='<tr>'+
     '<th>Item</th><th>Salesman</th><th>Branch-wise demand</th>'+
-    '<th class="num">Total Req.</th><th class="num">Invoiced</th><th class="num">Dismissed</th>'+
+    '<th class="num">Total Req.</th><th class="num">Invoiced</th>'+
     '<th class="num">Remaining</th><th class="num">Credit Note</th><th class="num">Net sold</th></tr>';
-  if(!list.length){$('tbody').innerHTML='<tr><td colspan="9"><div class="empty-state">No records for this item.</div></td></tr>';return;}
-  var s=list[0];
+  if(!list.length){$('tbody').innerHTML='<tr><td colspan="8"><div class="empty-state">No records for this item.</div></td></tr>';return;}
   var byBranch={}; list.forEach(function(r){byBranch[r.branch]=(byBranch[r.branch]||0)+r.ordered;});
   var salesmen=Array.from(new Set(list.map(function(r){return r.salesman;})));
   var tot=list.reduce(function(a,r){return a+r.ordered;},0), inv=list.reduce(function(a,r){return a+invTotal(r);},0);
-  var dis=list.reduce(function(a,r){return a+r.dismissed;},0), ret=list.reduce(function(a,r){return a+retTotal(r);},0);
-  var rem=tot-inv-dis;
+  var ret=list.reduce(function(a,r){return a+retTotal(r);},0);
+  var rem=tot-inv;
   var demand=Object.keys(byBranch).map(function(b){return '<span class="chip">'+b+' <b>'+byBranch[b]+'</b></span>';}).join("");
   var sm=salesmen.map(function(m){return '<span class="chip">'+m+'</span>';}).join("");
   $('tbody').innerHTML='<tr>'+
@@ -1000,7 +1046,6 @@ function renderProduct(list){
     '<td><div class="chips">'+demand+'</div></td>'+
     '<td class="num"><b>'+tot+'</b></td>'+
     '<td class="num">'+inv+'</td>'+
-    '<td class="num">'+(dis>0?'<span class="flag" style="background:var(--dead-w);color:#a5271b">'+dis+'</span>':'—')+'</td>'+
     '<td class="num">'+(rem>0?'<span class="bal open-b">'+rem+'</span>':'0')+'</td>'+
     '<td class="num">'+(ret>0?'<span class="flag f-ret">'+ret+'</span>':'—')+'</td>'+
     '<td class="num"><b style="color:var(--inv)">'+(inv-ret)+'</b></td></tr>';
@@ -1019,7 +1064,7 @@ function render(){
    7) DEBUG / FIELD DISCOVERY panel
    ========================================================================= */
 function renderDebug(){
-  var order=[["itemMaster","Item Master"],["salesOrder","Sales Order item-wise"],["materialRequest","Material Request"],["purchaseOrder","PO item-wise"],["purchaseOrderHeader","PO header (Purchase_Order_Report)"],["allocations","Allocations (All_Material_Request_Allocations)"],["allocationQty","Allocation qty subform"],["purchaseTransit","Purchase Transit (API_PURCHASE_TRANSIT)"],["batchTransfer","Batch Transfer"],["invoice","Sales Invoice (API_SALES_INVOICES)"],["creditNote","Credit Note (API_CREDIT_NOTES)"]];
+  var order=[["itemMaster","Item Master"],["salesOrder","Sales Order item-wise"],["materialRequest","Material Request"],["purchaseOrder","PO item-wise"],["purchaseOrderHeader","PO header (Purchase_Order_Report)"],["allocations","Allocations (All_Material_Request_Allocations)"],["allocationQty","Allocation qty subform"],["purchaseTransit","Purchase Transit (API_PURCHASE_TRANSIT)"],["purchaseReceive","Purchase Receive (API_PURCHASE_RECEIVE)"],["bill","Bill (API_of_BILLS)"],["batchTransfer","Batch Transfer"],["invoice","Sales Invoice (API_SALES_INVOICES)"],["creditNote","Credit Note (API_CREDIT_NOTES)"]];
   // Extra discovery reports (sampled, not yet wired into the table).
   SAMPLE_REPORTS.forEach(function(rep){ order.push([rep, rep]); });
   var out="";
