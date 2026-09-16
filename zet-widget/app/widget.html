@@ -196,7 +196,7 @@
 "use strict";
 
 /* Build marker — bump on each deploy so we can confirm the loaded version. */
-var BUILD = "2026-09-16-u";
+var BUILD = "2026-09-16-v";
 
 /* =========================================================================
    1) CONFIGURATION  — edit ONLY this block once you confirm link names.
@@ -546,8 +546,8 @@ var MR_MAP = {};// SO number -> {mr, date} from the Material Request report
 var PO_BY_MR = {};// MR number -> {poNo, poDate} from the PO header report
 var ALLOC_BY_MR = {};// MR number -> {qty, reqQty, allocIds:[]} for THIS item
 var TRANSIT_BY_MR = {};// MR number -> {no, date, qty} for THIS item
-var BILL_BY_PO = {};// PO number -> {no, date, qty} for THIS item
-var RECEIVE_BY_PO = {};// PO number -> {no, date} for THIS item
+var BILL_BY_MR = {};// MR number -> {no, date} for THIS item (via allocation hub)
+var RECEIVE_BY_MR = {};// MR number -> {no, date} for THIS item (via allocation hub)
 var STATE = { view:"product", itemCode:"", itemName:"", rows:[] };
 
 // Extract SO number, MR number and date from a Material Request record by value
@@ -691,106 +691,79 @@ function loadItem(code){
       ).then(rerender);
     }
 
-    // Enrichment E — Allocation quantities + Transit, joined on the allocation ID.
-    // 1) allocations for THIS item (record ID = allocation id, Item_Master filters)
-    // 2) subform gives per-MR QTY (allocated/transit) and REQ_QTY (MR requested)
-    // 3) transit report gives the transit no/date per allocation
-    ALLOC_BY_MR = {}; TRANSIT_BY_MR = {};
+    // Enrichment E — Allocation hub. The allocation record ties an item's MR to
+    // its transit / receive / bill (PO links on those headers are often empty, so
+    // we go through the hub). Everything keyed by MR. Fetched sequentially.
+    ALLOC_BY_MR = {}; TRANSIT_BY_MR = {}; RECEIVE_BY_MR = {}; BILL_BY_MR = {};
     var itemId2 = core.itemMaster.length ? lv(core.itemMaster[0].ID) : "";
     PROG.allocations="…"; paintProgress(code);
     fetchAll(FIELD.allocations.report, null).then(function(allocs){
       RAW.allocations = allocs;
-      var itemAlloc = {};
-      allocs.forEach(function(a){
-        var im = a[FIELD.allocations.fields.itemMaster]; var imId = im && im.ID;
-        if(imId && String(imId)===String(itemId2)) itemAlloc[lv(a.ID)] = true;
-      });
       return delay(200).then(function(){ return fetchAll(FIELD.allocationQty.report, null); }).then(function(subs){
         RAW.allocationQty = subs;
-        var AF = FIELD.allocationQty.fields;
+        // allocation id -> { mr, qty, reqQty, soKey }
+        var AF = FIELD.allocationQty.fields, allocMR = {};
         subs.forEach(function(s){
-          var allocId = lookupId(s[AF.alloc]);
-          if(!itemAlloc[allocId]) return;                 // only this item's allocations
+          var allocId = lookupId(s[AF.alloc]); if(!allocId) return;
           var mrObj = s[AF.mr];
           var mr = (mrObj && typeof mrObj==="object") ? lv(mrObj.Request_No || mrObj.zc_display_value) : lv(mrObj);
-          if(!mr) return;
-          // Zoho creates a fresh allocation record per stage (PO, transit, receive),
-          // each duplicated in this subform. Count each (MR, Sales Order line) once
-          // so the quantity isn't doubled when a later stage is created.
-          var soKey = lookupId(s.Sales_Order_Subform) || lv(s.Sales_Order_Subform) || "_";
-          var dkey = mr + "|" + soKey;
-          var e = ALLOC_BY_MR[mr] || { qty:0, reqQty:0, allocIds:[], _seen:{} };
-          if(!e._seen[dkey]){
-            e.qty += num(s[AF.qty]); e.reqQty += num(s[AF.reqQty]); e._seen[dkey] = true;
-          }
-          e.allocIds.push(allocId);
-          ALLOC_BY_MR[mr] = e;
+          allocMR[allocId] = { mr:mr, qty:num(s[AF.qty]), reqQty:num(s[AF.reqQty]),
+                               soKey: lookupId(s.Sales_Order_Subform) || lv(s.Sales_Order_Subform) || "_" };
         });
         return delay(200).then(function(){ return fetchAll(FIELD.purchaseTransit.report, null); }).then(function(transits){
           RAW.purchaseTransit = transits;
-          var TF = FIELD.purchaseTransit.fields, allocToTransit = {};
+          var TRANSIT_HDR = {}; // transit record id -> {no, date}
           transits.forEach(function(t){
-            var no = lv(t[TF.no]), date = valueByKeyLike(t, ["delivery_date","receives_date","date"], ["added_time"]);
-            (t[TF.lineItems]||[]).forEach(function(li){
-              var allocId = lookupId(li[TF.liAlloc]);
-              if(allocId) allocToTransit[allocId] = { no:no, date:date };
+            TRANSIT_HDR[lv(t.ID)] = { no:lv(t[FIELD.purchaseTransit.fields.no]),
+                                      date: valueByKeyLike(t, ["delivery_date","receives_date","date"], ["added_time","inv_date"]) };
+          });
+          return delay(200).then(function(){ return fetchAll(FIELD.purchaseReceive.report, null); }).then(function(receives){
+            RAW.purchaseReceive = receives;
+            var RECEIVE_HDR = {}; // receive record id -> {no, date, status}
+            receives.forEach(function(r){
+              RECEIVE_HDR[lv(r.ID)] = { no:lv(r.PO_receive_No),
+                                        date: valueByKeyLike(r, ["delivery_date","receives_date","date"], ["added_time","inv_date"]),
+                                        status: lv(r.POR_Status) };
+            });
+            return delay(200).then(function(){ return fetchAll(FIELD.bill.report, null); }).then(function(bills){
+              RAW.bill = bills;
+              var BILL_BY_RCVID = {}; // receive record id -> {no, date}
+              bills.forEach(function(b){
+                var prs = b.Purchase_Receives_No; var list = Array.isArray(prs)?prs:(prs?[prs]:[]);
+                list.forEach(function(pr){ var id = lookupId(pr) || (pr && pr.ID); if(id) BILL_BY_RCVID[id] = { no:lv(b.Bill_No), date:lv(b.BilDate) }; });
+              });
+              // Walk this item's allocations and link everything by MR.
+              var itemN = 0;
+              allocs.forEach(function(a){
+                var im = a[FIELD.allocations.fields.itemMaster];
+                if(!(im && String(im.ID)===String(itemId2))) return;
+                itemN++;
+                var allocId = lv(a.ID), info = allocMR[allocId];
+                if(!info || !info.mr) return;
+                var mr = info.mr;
+                // quantity — count each (MR, SO line) once (avoid per-stage doubling)
+                var e = ALLOC_BY_MR[mr] || { qty:0, reqQty:0, _seen:{} };
+                if(!e._seen[info.soKey]){ e.qty += info.qty; e.reqQty += info.reqQty; e._seen[info.soKey] = true; }
+                ALLOC_BY_MR[mr] = e;
+                // transit
+                var tId = a.Purchase_Transist && a.Purchase_Transist.ID;
+                if(tId && TRANSIT_HDR[tId] && !TRANSIT_BY_MR[mr]) TRANSIT_BY_MR[mr] = { no:TRANSIT_HDR[tId].no, date:TRANSIT_HDR[tId].date };
+                // receive (+ bill via the receive id)
+                var rObj = a.Purchase_Receives, rId = rObj && rObj.ID;
+                if(rId){
+                  var rh = RECEIVE_HDR[rId];
+                  if(!(rh && /void/i.test(rh.status)) && !RECEIVE_BY_MR[mr]){
+                    RECEIVE_BY_MR[mr] = { no: (rObj.PO_receive_No)||(rh&&rh.no)||"", date: rh?rh.date:"" };
+                  }
+                  if(BILL_BY_RCVID[rId] && !BILL_BY_MR[mr]) BILL_BY_MR[mr] = BILL_BY_RCVID[rId];
+                }
+              });
+              PROG.allocations = "✓ item allocs: "+itemN+"; MRs: "+Object.keys(ALLOC_BY_MR).length;
             });
           });
-          Object.keys(ALLOC_BY_MR).forEach(function(mr){
-            var e = ALLOC_BY_MR[mr], t=null;
-            e.allocIds.some(function(id){ if(allocToTransit[id]){ t=allocToTransit[id]; return true; } return false; });
-            TRANSIT_BY_MR[mr] = { no: t?t.no:"", date: t?t.date:"", qty: e.qty };
-          });
-          PROG.allocations = "✓ MRs with alloc: "+Object.keys(ALLOC_BY_MR).length;
         });
       });
     }).catch(function(e){ PROG.allocations="✗ "+errToStr(e); console.error("[allocations]", e); }).then(rerender);
-
-    // Enrichment F — Bill: join API_of_BILLS by PO number (Purchase_Order_No),
-    // keeping the RCVDQTY for our item from the Line_Item_Bill subform.
-    BILL_BY_PO = {};
-    var BF = FIELD.bill.fields;
-    PROG.bill="…"; paintProgress(code);
-    fetchAll(FIELD.bill.report, null).then(
-      function(bills){
-        RAW.bill = bills;
-        bills.forEach(function(b){
-          var poObj = b[BF.po];
-          var poNo = (poObj && typeof poObj==="object") ? lv(poObj.Order_No || poObj.zc_display_value) : lv(poObj);
-          if(!poNo) return;
-          var has=false, q=0;
-          (b[BF.lineItems]||[]).forEach(function(li){
-            if(String(lv(li[BF.liItemCode]))===String(code)){ has=true; q += num(li[BF.liQty]); }
-          });
-          if(has) BILL_BY_PO[poNo] = { no:lv(b[BF.no]), date:lv(b[BF.date]), qty:q };
-        });
-        PROG.bill = "✓ "+bills.length+" record(s); POs billed: "+Object.keys(BILL_BY_PO).length;
-      },
-      function(e){ RAW.bill=[]; PROG.bill="✗ "+errToStr(e); console.error("[bill]", e); }
-    ).then(rerender);
-
-    // Enrichment G — Purchase Receive: join API_PURCHASE_RECEIVE by PO number.
-    // Skip void receives. Read the PR/… number, a date, and confirm our item.
-    RECEIVE_BY_PO = {};
-    PROG.purchaseReceive="…"; paintProgress(code);
-    fetchAll(FIELD.purchaseReceive.report, null).then(
-      function(recs){
-        RAW.purchaseReceive = recs;
-        recs.forEach(function(rc){
-          if(/void/i.test(lv(rc.POR_Status) || lv(rc.Status) || lv(rc.PR_Status) || "")) return; // skip void
-          var poNo = poNoFromRec(rc, FIELD.purchaseReceive.fields.po);
-          if(!poNo) return;
-          var recNo = findByRegex(rc, /PR\/\d+/i) || lv(rc.PO_receive_No) || lv(rc.Order_No);
-          var date  = valueByKeyLike(rc, ["date"], ["added_time","modified","updat","inv_date"]);
-          // keep only receives that include our item (if line items are present)
-          var has=false;
-          findLineItems(rc).forEach(function(li){ if(String(lv(li.ITEM_CODE||li.ITEMCODE))===String(code)) has=true; });
-          if(has || !findLineItems(rc).length) RECEIVE_BY_PO[poNo] = { no:recNo, date:date };
-        });
-        PROG.purchaseReceive = "✓ "+recs.length+" record(s); POs received: "+Object.keys(RECEIVE_BY_PO).length;
-      },
-      function(e){ RAW.purchaseReceive=[]; PROG.purchaseReceive="✗ "+errToStr(e); console.error("[purchaseReceive]", e); }
-    ).then(rerender);
 
     // Enrichment C — Material Request (header report), joined by SO number.
     // Fetch all MRs and map SO number -> {mr, date} using value patterns.
@@ -889,11 +862,10 @@ function transformAndRender(D){
     // in the allocation's QTY); the downstream stages carry that same allocated qty.
     var allocQty = alloc ? alloc.qty : "";
     var poQty  = alloc ? alloc.qty : fbPoQty;
-    // Transit for THIS row's material request (allocated/received qty).
-    var trHit  = mrNo ? TRANSIT_BY_MR[mrNo] : null;
-    // Purchase Receive + Bill for THIS row's PO (PO-level documents).
-    var rcvHit  = poNo ? RECEIVE_BY_PO[poNo] : null;
-    var billHit = poNo ? BILL_BY_PO[poNo] : null;
+    // Transit / Receive / Bill for THIS row's material request (via allocation hub).
+    var trHit   = mrNo ? TRANSIT_BY_MR[mrNo] : null;
+    var rcvHit  = mrNo ? RECEIVE_BY_MR[mrNo] : null;
+    var billHit = mrNo ? BILL_BY_MR[mrNo]    : null;
     // Invoices for THIS sales order (by SO number); unattributed ones on row 0.
     var rowInv = (invBySo[soNo] || []).slice();
     if(i===0) rowInv = rowInv.concat(invNoSo);
@@ -912,7 +884,7 @@ function transformAndRender(D){
       grn: rcvHit ? [rcvHit.no, rcvHit.date] : ["",""],
       bill: billHit ? [billHit.no, billHit.date] : ["",""],
       ordered: ordered,
-      billQty: billHit ? (alloc ? alloc.qty : billHit.qty) : 0,  // allocated/billed qty for this MR
+      billQty: billHit ? allocQty : 0,     // allocated/billed qty for this MR
       dismissed: 0,
       rate: num(r["RATE"]),
       unit: lv(r[S.unit]) || "box",
@@ -920,8 +892,8 @@ function transformAndRender(D){
       poQty: poQty,
       _hasAlloc: !!alloc,       // true when a real allocation qty exists (skip computed split)
       mrQty: alloc ? alloc.reqQty : ordered,  // MR requested qty (allocation REQ_QTY; else SO qty before allocation)
-      transitQty: trHit ? trHit.qty : "",
-      grnQty: allocQty,                    // received qty for this MR
+      transitQty: trHit ? allocQty : "",
+      grnQty: rcvHit ? allocQty : "",      // received qty for this MR
       invoices: rowInv
     };
   });
