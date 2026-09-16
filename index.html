@@ -196,7 +196,7 @@
 "use strict";
 
 /* Build marker — bump on each deploy so we can confirm the loaded version. */
-var BUILD = "2026-09-16-g";
+var BUILD = "2026-09-16-h";
 
 /* =========================================================================
    1) CONFIGURATION  — edit ONLY this block once you confirm link names.
@@ -235,10 +235,15 @@ var FIELD = {
   },
 
   materialRequest: {
-    // Header-level report: DATE, REQUEST NO (MR/079), SO NO (SO/1126), branches.
-    // No item code — joined to Sales Orders by SO number. We read values by
-    // pattern (SO/…, MR/…, date) so unknown column link names don't matter.
-    report:  "Material_Request_Report"
+    // Header-level report, joined to Sales Orders by SO number. Sales_Order_no is
+    // a multi-lookup ARRAY of {Order_No, zc_display_value}; one MR can list many SOs.
+    report:  "Material_Request_Report",
+    fields:{
+      mrNo:      "Request_No",     // "MR/079"
+      date:      "Date_field",     // "16-Sep-2026"
+      soRefs:    "Sales_Order_no", // array of lookup objects
+      soOrderNo: "Order_No"        // within a Sales_Order_no element
+    }
   },
 
   purchaseOrder: {
@@ -551,7 +556,16 @@ function loadItem(code){
     fetchAll(FIELD.materialRequest.report, null).then(
       function(all){
         RAW.materialRequest = all; MR_MAP = {};
-        all.forEach(function(rec){ var m=scanMR(rec); if(m.so) MR_MAP[m.so]={mr:m.mr, date:m.date}; });
+        var MF = FIELD.materialRequest.fields;
+        all.forEach(function(rec){
+          var mr = lv(rec[MF.mrNo]), date = lv(rec[MF.date]);
+          var refs = rec[MF.soRefs];
+          var list = Array.isArray(refs) ? refs : (refs ? [refs] : []);
+          list.forEach(function(ref){
+            var soNo = (ref && typeof ref==="object") ? lv(ref[MF.soOrderNo] || ref.zc_display_value || ref.display_value) : lv(ref);
+            if(soNo) MR_MAP[soNo] = { mr:mr, date:date };
+          });
+        });
         PROG.materialRequest = "✓ "+all.length+" record(s)";
       },
       function(e){ RAW.materialRequest=[]; PROG.materialRequest="✗ "+errToStr(e); console.error("[materialRequest]", e); }
