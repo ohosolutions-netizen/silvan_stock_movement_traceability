@@ -196,7 +196,7 @@
 "use strict";
 
 /* Build marker — bump on each deploy so we can confirm the loaded version. */
-var BUILD = "2026-09-16-m";
+var BUILD = "2026-09-16-n";
 
 /* =========================================================================
    1) CONFIGURATION  — edit ONLY this block once you confirm link names.
@@ -321,7 +321,7 @@ var PAGE_SIZE = 200; // Creator max per page for getAllRecords
 // Reports sampled purely to inspect their (nested) structure in the debug panel
 // and console — not yet wired into the table. Used to design the transit match:
 // Purchase Transit -> Line items -> Material Allocations -> MR Allocation subform -> QTY.
-var SAMPLE_REPORTS = []; // (structures now known; these reports are fetched & used)
+var SAMPLE_REPORTS = ["API_of_BILLS"]; // sampled for structure discovery (bill wiring)
 
 /* =========================================================================
    2) SMALL HELPERS
