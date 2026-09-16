@@ -196,7 +196,7 @@
 "use strict";
 
 /* Build marker — bump on each deploy so we can confirm the loaded version. */
-var BUILD = "2026-09-16-b";
+var BUILD = "2026-09-16-c";
 
 /* =========================================================================
    1) CONFIGURATION  — edit ONLY this block once you confirm link names.
@@ -231,6 +231,21 @@ var FIELD = {
       salesman:  "Lookup.Sales_Man",      // lookup -> zc_display_value
       orderedQty:"QTY"                    // "2.000"
       // NOTE: this report has NO Material Request / branch / dismissed / bill columns.
+    }
+  },
+
+  materialRequest: {
+    report:  "Material_Request_Report",
+    itemCode:"ITEM_CODE",                 // TODO confirm from debug dump
+    fields:{
+      // guesses (verify from debug dump). Header-lookup style like Sales Order,
+      // OR a subform report — the transform handles both shapes.
+      mrNo:      "Lookup.Order_No",
+      mrDate:    "Lookup.Date_field",
+      qty:       "QTY",
+      lineItems: "Line_Item",             // if the report is header+subform
+      liItemCode:"ITEM_CODE",
+      liQty:     "QTY"
     }
   },
 
@@ -421,7 +436,7 @@ var STATE = { view:"product", itemCode:"", itemName:"", rows:[] };
 var PROG = {}; // per-report progress for the status banner
 function paintProgress(code){
   var info = sdkInfo();
-  var order=[["sdk","SDK"],["itemMaster","Item Master"],["salesOrder","Sales Order"],["purchaseOrder","Purchase Order"],["invoice","Invoice"],["creditNote","Credit Note"],["batchTransfer","Batch Transfer"]];
+  var order=[["sdk","SDK"],["itemMaster","Item Master"],["salesOrder","Sales Order"],["materialRequest","Material Request"],["purchaseOrder","Purchase Order"],["invoice","Invoice"],["creditNote","Credit Note"],["batchTransfer","Batch Transfer"]];
   var lines = order.filter(function(o){return PROG[o[0]]!==undefined;}).map(function(o){
     return '<div style="font-size:12px"><b>'+o[1]+':</b> '+PROG[o[0]]+'</div>';
   }).join("");
@@ -441,6 +456,7 @@ function loadItem(code){
   var specs = [
     ["itemMaster",    FIELD.itemMaster.report,    eqCriteria(FIELD.itemMaster.itemCode, code)],
     ["salesOrder",    FIELD.salesOrder.report,    eqCriteria(FIELD.salesOrder.itemCode, code)],
+    ["materialRequest",FIELD.materialRequest.report, eqCriteria(FIELD.materialRequest.itemCode, code)],
     ["purchaseOrder", FIELD.purchaseOrder.report, eqCriteria(FIELD.purchaseOrder.itemCode, code)],
     ["invoice",       FIELD.invoice.report,       eqCriteria(FIELD.invoice.itemCode, code)],
     ["creditNote",    FIELD.creditNote.report,    eqCriteria(FIELD.creditNote.itemCode, code)]
@@ -459,14 +475,14 @@ function loadItem(code){
   Promise.all(jobs).then(function(){
     var core = {
       itemMaster:results.itemMaster||[], so:results.salesOrder||[], po:results.purchaseOrder||[],
-      inv:results.invoice||[], cn:results.creditNote||[]
+      inv:results.invoice||[], cn:results.creditNote||[], mr:results.materialRequest||[]
     };
     STATE.itemName = (( core.itemMaster.length ? lv(core.itemMaster[0][FIELD.itemMaster.fields.name]) : (core.so.length? lv(core.so[0][FIELD.salesOrder.fields.name]) : code) )+"").trim();
     $("item-name-tag").textContent = STATE.itemName || code;
 
     RAW.batchTransfer = RAW.batchTransfer || [];
     function rerender(){
-      transformAndRender({itemMaster:core.itemMaster, so:core.so, po:core.po, inv:core.inv, cn:core.cn, bt:RAW.batchTransfer||[]});
+      transformAndRender({itemMaster:core.itemMaster, so:core.so, po:core.po, inv:core.inv, cn:core.cn, mr:core.mr, bt:RAW.batchTransfer||[]});
       renderDebug();
     }
     // Render essentials immediately; enrichments below re-render when they land.
@@ -534,6 +550,26 @@ function transformAndRender(D){
   // Item-code join can't tie a CN to a specific invoice, so group all under the first.
   if(invoices.length){ creditNotes.forEach(function(c){ invoices[0].creditNotes.push(c); }); }
 
+  // Material Request (item-level, first one shown). Handle a flat item-wise
+  // report (Lookup.Order_No / Date_field) OR a header+subform report (Line_Item).
+  var MF = F.materialRequest.fields, mrNo="", mrDate="", mrQty=0;
+  (D.mr||[]).some(function(rec){
+    var lines = rec[MF.lineItems];
+    if(Array.isArray(lines)){                    // header + subform shape
+      return lines.some(function(li){
+        if(String(lv(li[MF.liItemCode]))===String(STATE.itemCode)){
+          mrNo=lv(rec[MF.mrNo])||lv(rec["Order_No"])||lv(rec["MR_No"]);
+          mrDate=lv(rec[MF.mrDate])||lv(rec["Date_field"]);
+          mrQty=num(li[MF.liQty]); return true;
+        }
+        return false;
+      });
+    } else {                                     // flat item-wise shape
+      mrNo=lv(rec[MF.mrNo]); mrDate=lv(rec[MF.mrDate]); mrQty=num(rec[MF.qty]);
+      return true;
+    }
+  });
+
   // Item-level summaries (first PO / first branch-transfer shown on every line).
   var poNo   = D.po.length ? lv(D.po[0][F.purchaseOrder.fields.poNo])   : "";
   var poDate = D.po.length ? lv(D.po[0][F.purchaseOrder.fields.poDate]) : "";
@@ -552,7 +588,7 @@ function transformAndRender(D){
       salesman: lv(r[S.salesman]) || "—",
       vendor:"—",
       so:[ lv(r[S.orderNo]), lv(r[S.orderDate]) ],
-      mr:["",""],                          // Material Request not present in these reports
+      mr: mrNo ? [mrNo, mrDate] : ["",""],
       po: poNo ? [poNo, poDate] : ["",""],
       transit: btNo ? [btNo, "", "moving"] : ["","",""],
       grn:["",""],
@@ -564,6 +600,7 @@ function transformAndRender(D){
       unit: lv(r[S.unit]) || "box",
       poGroup: poNo || null,
       poQty: poQty,
+      mrQty: mrQty,
       transitQty: btQty,
       // invoices/credit notes are item-level; show them on the first line only
       invoices: i===0 ? invoices : []
@@ -660,7 +697,7 @@ function renderLines(list){
         tds += '<td'+RS+'><div class="item-name">'+r.name+'</div><div class="item-code mono">'+r.code+'</div></td>'+
           '<td'+RS+'><div class="branch-pill"><span class="branch-dot"></span>'+r.branch+'</div><div class="sub-mut">'+(r.customer||"")+'</div></td>'+
           '<td'+RS+'><span class="sm">'+r.salesman+'</span></td>'+
-          dnq(r.so,r.ordered,T)+dnq(r.mr,r.ordered,T)+dnq(r.po,r.poQty,T)+dnq(r.transit,r.transitQty,T)+
+          dnq(r.so,r.ordered,T)+dnq(r.mr,r.mrQty,T)+dnq(r.po,r.poQty,T)+dnq(r.transit,r.transitQty,T)+
           '<td class="num vsep"'+RS+'><span class="bal '+(bal>0?'open-b':'zero-b')+'">'+bal+'</span></td>';
       }
       if(p.invFirst) tds += invCells(p.iv, p.invRS);
@@ -716,7 +753,7 @@ function render(){
    7) DEBUG / FIELD DISCOVERY panel
    ========================================================================= */
 function renderDebug(){
-  var order=[["itemMaster","Item Master"],["salesOrder","Sales Order item-wise"],["purchaseOrder","PO item-wise"],["batchTransfer","Batch Transfer"],["invoice","Sales Invoice"],["creditNote","Credit Note (API_CREDIT_NOTES)"]];
+  var order=[["itemMaster","Item Master"],["salesOrder","Sales Order item-wise"],["materialRequest","Material Request"],["purchaseOrder","PO item-wise"],["batchTransfer","Batch Transfer"],["invoice","Sales Invoice"],["creditNote","Credit Note (API_CREDIT_NOTES)"]];
   var out="";
   order.forEach(function(pair){
     var key=pair[0], label=pair[1], recs=RAW[key]||[];
