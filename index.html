@@ -63,7 +63,7 @@
   .table-card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden}
   .table-scroll{overflow-x:auto}
   table{width:100%;border-collapse:collapse}
-  #tbl.lines-view{min-width:2260px}
+  #tbl.lines-view{min-width:2540px}
   thead th{background:var(--surface-2);text-align:left;font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;padding:9px 11px;border-bottom:1px solid var(--line);white-space:nowrap;vertical-align:middle;position:sticky;top:0}
   thead th.num{text-align:right}
   thead th.grp{text-align:center;background:#E9EEF3;border-left:2px solid var(--line);color:var(--ink-2);font-size:10.5px}
@@ -196,7 +196,7 @@
 "use strict";
 
 /* Build marker — bump on each deploy so we can confirm the loaded version. */
-var BUILD = "2026-09-16-n";
+var BUILD = "2026-09-16-o";
 
 /* =========================================================================
    1) CONFIGURATION  — edit ONLY this block once you confirm link names.
@@ -273,6 +273,10 @@ var FIELD = {
   allocationQty:  { report:"MATERIAL_REQUEST_ALLOCATION_SUBFORM_Report", fields:{ alloc:"MATERIAL_REQUEST_ALLOCATION", mr:"Material_Request", qty:"QTY", reqQty:"REQ_QTY" } },
   purchaseTransit:{ report:"API_PURCHASE_TRANSIT", fields:{ no:"Order_No", lineItems:"Line_Item", liItemCode:"ITEMCODE", liAlloc:"MATERIAL_REQUEST_ALLOCATION" } },
 
+  // Bill header: Bill_No + BilDate + Purchase_Order_No (link to PO) + Line_Item_Bill
+  // subform (ITEM_CODE + RCVDQTY). Joined to a row by its PO number.
+  bill: { report:"API_of_BILLS", fields:{ no:"Bill_No", date:"BilDate", po:"Purchase_Order_No", lineItems:"Line_Item_Bill", liItemCode:"ITEM_CODE", liQty:"RCVDQTY" } },
+
   batchTransfer: {                        // inter-branch "transit" movement
     report:  "All_Batch_Transfer_Line_Items",
     // The item is the lookup "Item" (no plain item-code column). Filter by the
@@ -321,7 +325,7 @@ var PAGE_SIZE = 200; // Creator max per page for getAllRecords
 // Reports sampled purely to inspect their (nested) structure in the debug panel
 // and console — not yet wired into the table. Used to design the transit match:
 // Purchase Transit -> Line items -> Material Allocations -> MR Allocation subform -> QTY.
-var SAMPLE_REPORTS = ["API_of_BILLS"]; // sampled for structure discovery (bill wiring)
+var SAMPLE_REPORTS = []; // (all structures known and wired)
 
 /* =========================================================================
    2) SMALL HELPERS
@@ -522,6 +526,7 @@ var MR_MAP = {};// SO number -> {mr, date} from the Material Request report
 var PO_BY_MR = {};// MR number -> {poNo, poDate} from the PO header report
 var ALLOC_BY_MR = {};// MR number -> {qty, reqQty, allocIds:[]} for THIS item
 var TRANSIT_BY_MR = {};// MR number -> {no, date, qty} for THIS item
+var BILL_BY_PO = {};// PO number -> {no, date, qty} for THIS item
 var STATE = { view:"product", itemCode:"", itemName:"", rows:[] };
 
 // Extract SO number, MR number and date from a Material Request record by value
@@ -711,6 +716,29 @@ function loadItem(code){
       });
     }).catch(function(e){ PROG.allocations="✗ "+errToStr(e); console.error("[allocations]", e); }).then(rerender);
 
+    // Enrichment F — Bill: join API_of_BILLS by PO number (Purchase_Order_No),
+    // keeping the RCVDQTY for our item from the Line_Item_Bill subform.
+    BILL_BY_PO = {};
+    var BF = FIELD.bill.fields;
+    PROG.bill="…"; paintProgress(code);
+    fetchAll(FIELD.bill.report, null).then(
+      function(bills){
+        RAW.bill = bills;
+        bills.forEach(function(b){
+          var poObj = b[BF.po];
+          var poNo = (poObj && typeof poObj==="object") ? lv(poObj.Order_No || poObj.zc_display_value) : lv(poObj);
+          if(!poNo) return;
+          var has=false, q=0;
+          (b[BF.lineItems]||[]).forEach(function(li){
+            if(String(lv(li[BF.liItemCode]))===String(code)){ has=true; q += num(li[BF.liQty]); }
+          });
+          if(has) BILL_BY_PO[poNo] = { no:lv(b[BF.no]), date:lv(b[BF.date]), qty:q };
+        });
+        PROG.bill = "✓ "+bills.length+" record(s); POs billed: "+Object.keys(BILL_BY_PO).length;
+      },
+      function(e){ RAW.bill=[]; PROG.bill="✗ "+errToStr(e); console.error("[bill]", e); }
+    ).then(rerender);
+
     // Enrichment C — Material Request (header report), joined by SO number.
     // Fetch all MRs and map SO number -> {mr, date} using value patterns.
     PROG.materialRequest="…"; paintProgress(code);
@@ -806,6 +834,8 @@ function transformAndRender(D){
     var poQty  = alloc ? alloc.reqQty : fbPoQty;
     // Transit for THIS row's material request (allocated/received qty).
     var trHit  = mrNo ? TRANSIT_BY_MR[mrNo] : null;
+    // Bill for THIS row's PO (bill is a PO-level document).
+    var billHit = poNo ? BILL_BY_PO[poNo] : null;
     // Invoices for THIS sales order (by SO number); unattributed ones on row 0.
     var rowInv = (invBySo[soNo] || []).slice();
     if(i===0) rowInv = rowInv.concat(invNoSo);
@@ -822,9 +852,9 @@ function transformAndRender(D){
       po: poNo ? [poNo, poDate] : ["",""],
       transit: (trHit && trHit.no) ? [trHit.no, trHit.date, "received"] : ["","",""],
       grn:["",""],
-      bill:["",""],
+      bill: billHit ? [billHit.no, billHit.date] : ["",""],
       ordered: ordered,
-      billQty: 0,                          // no bill column in report
+      billQty: billHit ? billHit.qty : 0,  // received/billed qty for this item on the PO
       dismissed: 0,                        // no dismissed column in report
       rate: num(r["RATE"]),
       unit: lv(r[S.unit]) || "box",
@@ -843,7 +873,7 @@ function transformAndRender(D){
                      .map(function(k){ return k+" ("+PROG[k]+")"; });
   if(failed.length){
     setStatus("err", "Some reports failed to load — usually a wrong report name, wrong item-code field link name, or the item code doesn't exist:<div style='margin-top:6px'>"+failed.join("<br>")+"</div>Open <b>Field discovery</b> below for the real keys.");
-  } else if(!rows.length && !invoices.length){
+  } else if(!rows.length && !invAll.length){
     setStatus("warn", "No records found for item code <b>"+STATE.itemCode+"</b> in any report. Either this item has no movement, or the item-code field link names in the config are off — check <b>Field discovery</b> below.");
   } else {
     setStatus(null);
@@ -892,7 +922,8 @@ function renderLines(list){
      '<th colspan="3" class="grp">Sales Order</th>'+
      '<th colspan="3" class="grp">Material Request</th>'+
      '<th colspan="3" class="grp">Purchase Order</th>'+
-     '<th colspan="3" class="grp">Transit (Branch)</th>'+
+     '<th colspan="3" class="grp">Purchase Transit</th>'+
+     '<th colspan="3" class="grp">Bill</th>'+
      '<th rowspan="2" class="num vsep">Balance</th>'+
      '<th colspan="3" class="grp">Invoice</th>'+
      '<th rowspan="2" class="num vsep">Dismissed</th>'+
@@ -900,7 +931,7 @@ function renderLines(list){
      '<th colspan="3" class="grp">Credit Note</th>'+
      '<th rowspan="2" class="vsep">Status</th>'+
    '</tr>'+
-   '<tr class="subhead">'+Array(6).fill('<th class="gstart">Date</th><th>No.</th><th class="num">Qty</th>').join('')+'</tr>';
+   '<tr class="subhead">'+Array(7).fill('<th class="gstart">Date</th><th>No.</th><th class="num">Qty</th>').join('')+'</tr>';
 
   var html="";
   list.forEach(function(r,li){
@@ -926,7 +957,7 @@ function renderLines(list){
         tds += '<td'+RS+'><div class="item-name">'+r.name+'</div><div class="item-code mono">'+r.code+'</div></td>'+
           '<td'+RS+'><div class="branch-pill"><span class="branch-dot"></span>'+r.branch+'</div><div class="sub-mut">'+(r.customer||"")+'</div></td>'+
           '<td'+RS+'><span class="sm">'+r.salesman+'</span></td>'+
-          dnq(r.so,r.ordered,T)+dnq(r.mr,r.mrQty,T)+dnq(r.po,r.poQty,T)+dnq(r.transit,r.transitQty,T)+
+          dnq(r.so,r.ordered,T)+dnq(r.mr,r.mrQty,T)+dnq(r.po,r.poQty,T)+dnq(r.transit,r.transitQty,T)+dnq(r.bill,r.billQty,T)+
           '<td class="num vsep"'+RS+'><span class="bal '+(bal>0?'open-b':'zero-b')+'">'+bal+'</span></td>';
       }
       if(p.invFirst) tds += invCells(p.iv, p.invRS);
