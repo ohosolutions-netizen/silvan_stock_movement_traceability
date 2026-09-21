@@ -63,7 +63,7 @@
   .table-card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden}
   .table-scroll{overflow-x:auto}
   table{width:100%;border-collapse:collapse}
-  #tbl.lines-view{min-width:2760px}
+  #tbl.lines-view{min-width:2850px}
   thead th{background:var(--surface-2);text-align:left;font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;padding:9px 11px;border-bottom:1px solid var(--line);white-space:nowrap;vertical-align:middle;position:sticky;top:0}
   thead th.num{text-align:right}
   thead th.grp{text-align:center;background:#E9EEF3;border-left:2px solid var(--line);color:var(--ink-2);font-size:10.5px}
@@ -196,7 +196,7 @@
 "use strict";
 
 /* Build marker — bump on each deploy so we can confirm the loaded version. */
-var BUILD = "2026-09-16-y";
+var BUILD = "2026-09-21-a";
 
 /* =========================================================================
    1) CONFIGURATION  — edit ONLY this block once you confirm link names.
@@ -855,6 +855,8 @@ function transformAndRender(D){
     var soNo = lv(r[S.orderNo]);
     var mrHit = MR_MAP[soNo];
     var mrNo  = mrHit ? mrHit.mr : "";
+    // Dismissed qty against the Sales Order (any "dismiss" column, e.g. Dismissed_Qty).
+    var dismissed = num(valueByKeyLike(r, ["dismiss"], ["date","box","emp","void"]));
     var poHit = mrNo ? PO_BY_MR[mrNo] : null;
     var poNo   = poHit ? poHit.poNo   : fbPoNo;
     var poDate = poHit ? poHit.poDate : fbPoDate;
@@ -880,7 +882,7 @@ function transformAndRender(D){
       grn: rcvHit ? [rcvHit.no, rcvHit.date] : ["",""],
       bill: billHit ? [billHit.no, billHit.date] : ["",""],
       ordered: ordered,
-      dismissed: 0,
+      dismissed: dismissed,
       rate: num(r["RATE"]),
       unit: lv(r[S.unit]) || "box",
       poGroup: poNo || null,
@@ -984,7 +986,8 @@ function renderLines(list){
      '<th colspan="3" class="grp">Bill</th>'+
      '<th rowspan="2" class="num vsep">Balance</th>'+
      '<th colspan="3" class="grp">Invoice</th>'+
-     '<th rowspan="2" class="num vsep">Remaining</th>'+
+     '<th rowspan="2" class="num vsep">Dismissed</th>'+
+     '<th rowspan="2" class="num">Remaining</th>'+
      '<th colspan="3" class="grp">Credit Note</th>'+
      '<th rowspan="2" class="vsep">Status</th>'+
    '</tr>'+
@@ -994,7 +997,7 @@ function renderLines(list){
   list.forEach(function(r,li){
     var invs=r.invoices||[];
     var bal=r.ordered - r.billQty;
-    var rem=r.ordered - invTotal(r);
+    var rem=r.ordered - invTotal(r) - r.dismissed;
     var returns=retTotal(r);
     var st=stageOf(r), bc=badgeClass[st];
     var retFlag = returns>0?'<span class="flag f-ret">Return '+returns+'</span>':"";
@@ -1019,7 +1022,8 @@ function renderLines(list){
       }
       if(p.invFirst) tds += invCells(p.iv, p.invRS);
       if(idx===0){
-        tds += '<td class="num vsep"'+RS+'><span class="bal '+(rem>0?'open-b':'zero-b')+'">'+rem+'</span></td>';
+        tds += '<td class="num vsep"'+RS+'><span class="qy" style="'+(r.dismissed>0?'color:var(--dead);font-weight:700':'color:var(--muted)')+'">'+r.dismissed+'</span></td>'+
+          '<td class="num"'+RS+'><span class="bal '+(rem>0?'open-b':'zero-b')+'">'+rem+'</span></td>';
       }
       tds += cnCells(p.cn);
       if(idx===0) tds += '<td class="vsep"'+RS+'><span class="badge '+bc+'"><span class="d"></span>'+st+'</span>'+retFlag+'</td>';
@@ -1033,14 +1037,14 @@ function renderProduct(list){
   $('tbl').className='product-view';
   $('thead').innerHTML='<tr>'+
     '<th>Item</th><th>Salesman</th><th>Branch-wise demand</th>'+
-    '<th class="num">Total Req.</th><th class="num">Invoiced</th>'+
+    '<th class="num">Total Req.</th><th class="num">Invoiced</th><th class="num">Dismissed</th>'+
     '<th class="num">Remaining</th><th class="num">Credit Note</th><th class="num">Net sold</th></tr>';
-  if(!list.length){$('tbody').innerHTML='<tr><td colspan="8"><div class="empty-state">No records for this item.</div></td></tr>';return;}
+  if(!list.length){$('tbody').innerHTML='<tr><td colspan="9"><div class="empty-state">No records for this item.</div></td></tr>';return;}
   var byBranch={}; list.forEach(function(r){byBranch[r.branch]=(byBranch[r.branch]||0)+r.ordered;});
   var salesmen=Array.from(new Set(list.map(function(r){return r.salesman;})));
   var tot=list.reduce(function(a,r){return a+r.ordered;},0), inv=list.reduce(function(a,r){return a+invTotal(r);},0);
-  var ret=list.reduce(function(a,r){return a+retTotal(r);},0);
-  var rem=tot-inv;
+  var dis=list.reduce(function(a,r){return a+r.dismissed;},0), ret=list.reduce(function(a,r){return a+retTotal(r);},0);
+  var rem=tot-inv-dis;
   var demand=Object.keys(byBranch).map(function(b){return '<span class="chip">'+b+' <b>'+byBranch[b]+'</b></span>';}).join("");
   var sm=salesmen.map(function(m){return '<span class="chip">'+m+'</span>';}).join("");
   $('tbody').innerHTML='<tr>'+
@@ -1049,6 +1053,7 @@ function renderProduct(list){
     '<td><div class="chips">'+demand+'</div></td>'+
     '<td class="num"><b>'+tot+'</b></td>'+
     '<td class="num">'+inv+'</td>'+
+    '<td class="num">'+(dis>0?'<span class="flag" style="background:var(--dead-w);color:#a5271b">'+dis+'</span>':'—')+'</td>'+
     '<td class="num">'+(rem>0?'<span class="bal open-b">'+rem+'</span>':'0')+'</td>'+
     '<td class="num">'+(ret>0?'<span class="flag f-ret">'+ret+'</span>':'—')+'</td>'+
     '<td class="num"><b style="color:var(--inv)">'+(inv-ret)+'</b></td></tr>';
