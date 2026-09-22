@@ -34,7 +34,7 @@
     font-synthesis:none;
   }
   *{box-sizing:border-box;margin:0;padding:0}
-  html,body{background:var(--bg);color:var(--ink);font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px;line-height:1.45;-webkit-font-smoothing:antialiased}
+  html,body{background:var(--bg);color:var(--ink);font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px;line-height:1.45;-webkit-font-smoothing:antialiased;overscroll-behavior-x:none}
   .mono{font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace}
 
   .wrap{max-width:1560px;margin:0 auto;padding:18px 18px 60px}
@@ -61,7 +61,13 @@
   .legend i.solid2{border-top:2px solid #cbd4dc}
 
   .table-card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden}
-  .table-scroll{overflow-x:auto}
+  .table-scroll{overflow-x:auto;overscroll-behavior-x:contain;cursor:grab}
+  .table-scroll.drag{cursor:grabbing;user-select:none}
+  .table-scroll::-webkit-scrollbar{height:12px}
+  .table-scroll::-webkit-scrollbar-thumb{background:#c2ccd6;border-radius:8px;border:3px solid var(--surface)}
+  .table-scroll::-webkit-scrollbar-track{background:var(--surface-2)}
+  .scroll-hint{font-size:11px;color:var(--muted);margin:6px 2px 0;display:flex;align-items:center;gap:6px}
+  .scroll-hint svg{width:13px;height:13px}
   table{width:100%;border-collapse:collapse}
   #tbl.lines-view{min-width:2850px}
   thead th{background:var(--surface-2);text-align:left;font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;padding:9px 11px;border-bottom:1px solid var(--line);white-space:nowrap;vertical-align:middle;position:sticky;top:0}
@@ -179,6 +185,10 @@
   <div class="table-card"><div class="table-scroll">
     <table id="tbl" class="product-view"><thead id="thead"></thead><tbody id="tbody"></tbody></table>
   </div></div>
+  <div class="scroll-hint" id="scroll-hint">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 7 4 12l4 5M16 7l4 5-4 5M4 12h16"/></svg>
+    Wide table — click and drag to scroll sideways (or hold Shift while scrolling).
+  </div>
 
   <div class="foot-note">Live data &middot; Silvan Tiles / Zoho Creator. Filtered by item code passed from the page. &middot; <span id="build-tag"></span></div>
 
@@ -196,7 +206,7 @@
 "use strict";
 
 /* Build marker — bump on each deploy so we can confirm the loaded version. */
-var BUILD = "2026-09-21-a";
+var BUILD = "2026-09-22-a";
 
 /* =========================================================================
    1) CONFIGURATION  — edit ONLY this block once you confirm link names.
@@ -1137,6 +1147,19 @@ function collectParams(C){
 
 function boot(){
   var bt=$('build-tag'); if(bt) bt.textContent="build "+BUILD;
+
+  // Horizontal scrolling helpers (macOS two-finger swipe otherwise navigates back):
+  // click-and-drag to pan, and Shift+wheel for horizontal wheel scrolling.
+  (function(){
+    var el = document.querySelector('.table-scroll'); if(!el) return;
+    var down=false, sx=0, sl=0;
+    el.addEventListener('mousedown', function(e){ down=true; sx=e.pageX; sl=el.scrollLeft; el.classList.add('drag'); });
+    window.addEventListener('mouseup', function(){ if(down){ down=false; el.classList.remove('drag'); } });
+    window.addEventListener('mousemove', function(e){ if(down){ el.scrollLeft = sl - (e.pageX - sx); } });
+    el.addEventListener('wheel', function(e){
+      if(e.shiftKey && e.deltaY){ el.scrollLeft += e.deltaY; e.preventDefault(); }
+    }, {passive:false});
+  })();
   // view toggle
   document.querySelectorAll('.seg button').forEach(function(b){
     b.addEventListener('click',function(){
