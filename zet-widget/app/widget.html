@@ -209,7 +209,7 @@
 "use strict";
 
 /* Build marker — bump on each deploy so we can confirm the loaded version. */
-var BUILD = "2026-09-23-a";
+var BUILD = "2026-09-23-b";
 
 /* =========================================================================
    1) CONFIGURATION  — edit ONLY this block once you confirm link names.
@@ -992,6 +992,7 @@ function renderLines(list){
      '<th rowspan="2">Branch / Customer</th>'+
      '<th rowspan="2">Salesman</th>'+
      '<th colspan="3" class="grp">Sales Order</th>'+
+     '<th rowspan="2" class="num vsep">Dismissed</th>'+
      '<th colspan="3" class="grp">Material Request</th>'+
      '<th colspan="3" class="grp">Purchase Order</th>'+
      '<th colspan="3" class="grp">Purchase Transit</th>'+
@@ -999,8 +1000,7 @@ function renderLines(list){
      '<th colspan="3" class="grp">Bill</th>'+
      '<th rowspan="2" class="num vsep">Balance</th>'+
      '<th colspan="3" class="grp">Invoice</th>'+
-     '<th rowspan="2" class="num vsep">Dismissed</th>'+
-     '<th rowspan="2" class="num">Remaining</th>'+
+     '<th rowspan="2" class="num vsep">Remaining</th>'+
      '<th colspan="3" class="grp">Credit Note</th>'+
      '<th rowspan="2" class="vsep">Status</th>'+
    '</tr>'+
@@ -1030,13 +1030,14 @@ function renderLines(list){
         tds += '<td'+RS+'><div class="item-name">'+r.name+'</div><div class="item-code mono">'+r.code+'</div></td>'+
           '<td'+RS+'><div class="branch-pill"><span class="branch-dot"></span>'+r.branch+'</div><div class="sub-mut">'+(r.customer||"")+'</div></td>'+
           '<td'+RS+'><span class="sm">'+r.salesman+'</span></td>'+
-          dnq(r.so,r.ordered,T)+dnq(r.mr,r.mrQty,T)+dnq(r.po,r.poQty,T)+dnq(r.transit,r.transitQty,T)+dnq(r.grn,r.grnQty,T)+dnq(r.bill,r.billQty,T)+
+          dnq(r.so,r.ordered,T)+
+          '<td class="num vsep"'+RS+'><span class="qy" style="'+(r.dismissed>0?'color:var(--dead);font-weight:700':'color:var(--muted)')+'">'+r.dismissed+'</span></td>'+
+          dnq(r.mr,r.mrQty,T)+dnq(r.po,r.poQty,T)+dnq(r.transit,r.transitQty,T)+dnq(r.grn,r.grnQty,T)+dnq(r.bill,r.billQty,T)+
           '<td class="num vsep"'+RS+'><span class="bal '+(bal>0?'open-b':'zero-b')+'">'+bal+'</span></td>';
       }
       if(p.invFirst) tds += invCells(p.iv, p.invRS);
       if(idx===0){
-        tds += '<td class="num vsep"'+RS+'><span class="qy" style="'+(r.dismissed>0?'color:var(--dead);font-weight:700':'color:var(--muted)')+'">'+r.dismissed+'</span></td>'+
-          '<td class="num"'+RS+'><span class="bal '+(rem>0?'open-b':'zero-b')+'">'+rem+'</span></td>';
+        tds += '<td class="num vsep"'+RS+'><span class="bal '+(rem>0?'open-b':'zero-b')+'">'+rem+'</span></td>';
       }
       tds += cnCells(p.cn);
       if(idx===0) tds += '<td class="vsep"'+RS+'><span class="badge '+bc+'"><span class="d"></span>'+st+'</span>'+retFlag+'</td>';
