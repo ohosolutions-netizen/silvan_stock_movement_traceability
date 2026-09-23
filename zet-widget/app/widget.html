@@ -209,7 +209,7 @@
 "use strict";
 
 /* Build marker — bump on each deploy so we can confirm the loaded version. */
-var BUILD = "2026-09-23-c";
+var BUILD = "2026-09-23-d";
 
 /* =========================================================================
    1) CONFIGURATION  — edit ONLY this block once you confirm link names.
@@ -593,6 +593,8 @@ function loadItem(code){
   STATE.itemCode = code;
   $("item-code-tag").textContent = code || "—";
   $("item-name-tag").textContent = "Loading…";
+  // Reset all per-item state so a new item never shows the previous one's data.
+  RAW = {}; MR_MAP = {}; PO_BY_MR = {}; ALLOC_BY_MR = {}; TRANSIT_BY_MR = {}; RECEIVE_BY_MR = {}; BILL_BY_MR = {}; CN_HDR = {}; STATE.rows = [];
   PROG = { sdk: sdkInfo().apiGetAll || sdkInfo().dataGet ? "✓ ready" : "✗ no data method — keys: "+sdkInfo().keys.join(", ") };
   paintProgress(code);
 
