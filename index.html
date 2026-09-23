@@ -209,7 +209,7 @@
 "use strict";
 
 /* Build marker — bump on each deploy so we can confirm the loaded version. */
-var BUILD = "2026-09-23-e";
+var BUILD = "2026-09-23-f";
 
 /* =========================================================================
    1) CONFIGURATION  — edit ONLY this block once you confirm link names.
@@ -640,6 +640,19 @@ function loadItem(code){
     }
     // Render essentials immediately; enrichments below re-render when they land.
     rerender();
+
+    // Fallback — some Sales Order lines don't populate the flat ITEM_CODE field
+    // (the code lives in the ITEM_NAME lookup). If the item exists but no SO rows
+    // matched by code, refetch Sales Orders by the item master (ITEM_NAME lookup).
+    var soItemId = core.itemMaster.length ? lv(core.itemMaster[0].ID) : "";
+    if(!core.so.length && soItemId){
+      PROG.salesOrder = "… (retry by item)"; paintProgress(code);
+      var soF = FIELD.salesOrder.fields;
+      fetchAll(FIELD.salesOrder.report, '('+soF.name+' == "'+soItemId+'")').then(
+        function(so2){ if(stale()) return; core.so = so2; RAW.salesOrder = so2; PROG.salesOrder = "✓ "+so2.length+" record(s) (by item)"; rerender(); },
+        function(e){ if(stale()) return; PROG.salesOrder = "✗ "+errToStr(e); console.error("[SO by item]", e); }
+      );
+    }
 
     // Enrichment A — Batch Transfer (transit): filter by item master record ID.
     PROG.batchTransfer="…";
