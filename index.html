@@ -209,7 +209,7 @@
 "use strict";
 
 /* Build marker — bump on each deploy so we can confirm the loaded version. */
-var BUILD = "2026-09-23-d";
+var BUILD = "2026-09-23-e";
 
 /* =========================================================================
    1) CONFIGURATION  — edit ONLY this block once you confirm link names.
@@ -576,6 +576,7 @@ function scanMR(rec){
   return { so:so, mr:mr, date:date };
 }
 
+var LOAD_SEQ = 0; // increments each load; stale (older) async callbacks are ignored
 var PROG = {}; // per-report progress for the status banner
 function paintProgress(code){
   var info = sdkInfo();
@@ -593,7 +594,10 @@ function loadItem(code){
   STATE.itemCode = code;
   $("item-code-tag").textContent = code || "—";
   $("item-name-tag").textContent = "Loading…";
-  // Reset all per-item state so a new item never shows the previous one's data.
+  // Reset all per-item state so a new item never shows the previous one's data,
+  // and take a load token so stale (in-flight) callbacks from a prior item abort.
+  var myLoad = ++LOAD_SEQ;
+  function stale(){ return myLoad !== LOAD_SEQ; }
   RAW = {}; MR_MAP = {}; PO_BY_MR = {}; ALLOC_BY_MR = {}; TRANSIT_BY_MR = {}; RECEIVE_BY_MR = {}; BILL_BY_MR = {}; CN_HDR = {}; STATE.rows = [];
   PROG = { sdk: sdkInfo().apiGetAll || sdkInfo().dataGet ? "✓ ready" : "✗ no data method — keys: "+sdkInfo().keys.join(", ") };
   paintProgress(code);
@@ -630,6 +634,7 @@ function loadItem(code){
 
     RAW.batchTransfer = RAW.batchTransfer || [];
     function rerender(){
+      if(stale()) return;   // a newer item is loading — ignore this stale render
       transformAndRender({itemMaster:core.itemMaster, so:core.so, po:core.po, inv:core.inv, cn:core.cn, mr:core.mr, bt:RAW.batchTransfer||[]});
       renderDebug();
     }
@@ -690,6 +695,7 @@ function loadItem(code){
       var poCrit = "(" + poNos.map(function(n){ return PHF.poNo+' == "'+n+'"'; }).join(" || ") + ")";
       fetchAll(FIELD.purchaseOrderHeader.report, poCrit).then(
         function(all){
+          if(stale()) return;
           RAW.purchaseOrderHeader = all;
           all.forEach(function(po){
             if(/void/i.test(lv(po.PO_Status))) return;   // skip void POs
@@ -742,6 +748,7 @@ function loadItem(code){
                                         status: lv(r.POR_Status) };
             });
             return delay(200).then(function(){ return fetchAll(FIELD.bill.report, null); }).then(function(bills){
+              if(stale()) return;   // a newer item is loading — don't write stale joins
               RAW.bill = bills;
               var BILL_BY_RCVID = {}; // receive record id -> {no, date}
               bills.forEach(function(b){
@@ -787,6 +794,7 @@ function loadItem(code){
     PROG.materialRequest="…"; paintProgress(code);
     fetchAll(FIELD.materialRequest.report, null).then(
       function(all){
+        if(stale()) return;
         RAW.materialRequest = all; MR_MAP = {};
         var MF = FIELD.materialRequest.fields;
         all.forEach(function(rec){
