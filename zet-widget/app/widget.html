@@ -66,8 +66,10 @@
   .table-scroll::-webkit-scrollbar{height:12px}
   .table-scroll::-webkit-scrollbar-thumb{background:#c2ccd6;border-radius:8px;border:3px solid var(--surface)}
   .table-scroll::-webkit-scrollbar-track{background:var(--surface-2)}
-  .scroll-hint{font-size:11px;color:var(--muted);margin:6px 2px 0;display:flex;align-items:center;gap:6px}
-  .scroll-hint svg{width:13px;height:13px}
+  .scroll-hint{font-size:11px;color:var(--muted);margin:8px 2px 0;display:flex;align-items:center;gap:8px}
+  .scroll-btn{border:1px solid var(--line);background:var(--surface);color:var(--ink-2);width:30px;height:26px;border-radius:7px;cursor:pointer;font-size:16px;line-height:1;font-weight:700;display:inline-flex;align-items:center;justify-content:center}
+  .scroll-btn:hover{background:var(--surface-2);border-color:#c8d2dd}
+  .scroll-btn:active{background:var(--primary-wash)}
   table{width:100%;border-collapse:collapse}
   #tbl.lines-view{min-width:2850px}
   thead th{background:var(--surface-2);text-align:left;font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;padding:9px 11px;border-bottom:1px solid var(--line);white-space:nowrap;vertical-align:middle;position:sticky;top:0}
@@ -186,8 +188,9 @@
     <table id="tbl" class="product-view"><thead id="thead"></thead><tbody id="tbody"></tbody></table>
   </div></div>
   <div class="scroll-hint" id="scroll-hint">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 7 4 12l4 5M16 7l4 5-4 5M4 12h16"/></svg>
-    Wide table — click and drag to scroll sideways (or hold Shift while scrolling).
+    <button class="scroll-btn" id="scroll-left" title="Scroll left" aria-label="Scroll left">‹</button>
+    <button class="scroll-btn" id="scroll-right" title="Scroll right" aria-label="Scroll right">›</button>
+    <span>Wide table — use these arrows, click-and-drag, or hold Shift while scrolling.</span>
   </div>
 
   <div class="foot-note">Live data &middot; Silvan Tiles / Zoho Creator. Filtered by item code passed from the page. &middot; <span id="build-tag"></span></div>
@@ -206,7 +209,7 @@
 "use strict";
 
 /* Build marker — bump on each deploy so we can confirm the loaded version. */
-var BUILD = "2026-09-22-a";
+var BUILD = "2026-09-23-a";
 
 /* =========================================================================
    1) CONFIGURATION  — edit ONLY this block once you confirm link names.
@@ -1149,16 +1152,22 @@ function boot(){
   var bt=$('build-tag'); if(bt) bt.textContent="build "+BUILD;
 
   // Horizontal scrolling helpers (macOS two-finger swipe otherwise navigates back):
-  // click-and-drag to pan, and Shift+wheel for horizontal wheel scrolling.
+  // capture the horizontal wheel delta and turn it into table scroll (blocking the
+  // browser back-gesture), support Shift+wheel, click-and-drag pan, and ◀ ▶ buttons.
   (function(){
     var el = document.querySelector('.table-scroll'); if(!el) return;
+    el.addEventListener('wheel', function(e){
+      var dx = e.deltaX || (e.shiftKey ? e.deltaY : 0);
+      if(dx){ el.scrollLeft += dx; e.preventDefault(); } // consume horizontal -> no back-nav
+    }, {passive:false});
     var down=false, sx=0, sl=0;
     el.addEventListener('mousedown', function(e){ down=true; sx=e.pageX; sl=el.scrollLeft; el.classList.add('drag'); });
     window.addEventListener('mouseup', function(){ if(down){ down=false; el.classList.remove('drag'); } });
-    window.addEventListener('mousemove', function(e){ if(down){ el.scrollLeft = sl - (e.pageX - sx); } });
-    el.addEventListener('wheel', function(e){
-      if(e.shiftKey && e.deltaY){ el.scrollLeft += e.deltaY; e.preventDefault(); }
-    }, {passive:false});
+    window.addEventListener('mousemove', function(e){ if(down){ el.scrollLeft = sl - (e.pageX - sx); e.preventDefault(); } });
+    var L=$('scroll-left'), R=$('scroll-right');
+    function by(d){ el.scrollBy({left:d, behavior:'smooth'}); }
+    if(L) L.addEventListener('click', function(){ by(-500); });
+    if(R) R.addEventListener('click', function(){ by(500); });
   })();
   // view toggle
   document.querySelectorAll('.seg button').forEach(function(b){
