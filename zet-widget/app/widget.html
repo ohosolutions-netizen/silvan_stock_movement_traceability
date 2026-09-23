@@ -209,7 +209,7 @@
 "use strict";
 
 /* Build marker — bump on each deploy so we can confirm the loaded version. */
-var BUILD = "2026-09-23-b";
+var BUILD = "2026-09-23-c";
 
 /* =========================================================================
    1) CONFIGURATION  — edit ONLY this block once you confirm link names.
@@ -907,8 +907,9 @@ function transformAndRender(D){
     };
   });
 
-  // Keep only rows whose Sales Order has a Material Request.
-  rows = rows.filter(function(x){ return x.mr && x.mr[0]; });
+  // Keep rows whose Sales Order has a Material Request, OR that were dismissed
+  // (a dismissed SO has no MR but must still be shown).
+  rows = rows.filter(function(x){ return (x.mr && x.mr[0]) || x.dismissed > 0; });
 
   // Quantity allocation: split each PO's total item quantity across its MR rows,
   // largest request first (PO 50 over MR 30 + MR 20 -> 30 and 20; PO 49 -> 30 and
@@ -1014,6 +1015,7 @@ function renderLines(list){
     var returns=retTotal(r);
     var st=stageOf(r), bc=badgeClass[st];
     var retFlag = returns>0?'<span class="flag f-ret">Return '+returns+'</span>':"";
+    var disFlag = r.dismissed>0?'<span class="flag" style="background:var(--dead-w);color:#a5271b">Dismissed '+r.dismissed+'</span>':"";
 
     var phys=[];
     if(!invs.length){ phys.push({iv:null,invRS:1,invFirst:true,cn:null,invStart:false}); }
@@ -1040,7 +1042,7 @@ function renderLines(list){
         tds += '<td class="num vsep"'+RS+'><span class="bal '+(rem>0?'open-b':'zero-b')+'">'+rem+'</span></td>';
       }
       tds += cnCells(p.cn);
-      if(idx===0) tds += '<td class="vsep"'+RS+'><span class="badge '+bc+'"><span class="d"></span>'+st+'</span>'+retFlag+'</td>';
+      if(idx===0) tds += '<td class="vsep"'+RS+'><span class="badge '+bc+'"><span class="d"></span>'+st+'</span>'+retFlag+disFlag+'</td>';
       html += '<tr class="'+cls.join(' ')+'">'+tds+'</tr>';
     });
   });
