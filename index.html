@@ -209,7 +209,7 @@
 "use strict";
 
 /* Build marker — bump on each deploy so we can confirm the loaded version. */
-var BUILD = "2026-09-23-f";
+var BUILD = "2026-09-23-g";
 
 /* =========================================================================
    1) CONFIGURATION  — edit ONLY this block once you confirm link names.
@@ -970,7 +970,9 @@ function transformAndRender(D){
   if(failed.length){
     setStatus("err", "Some reports failed to load — usually a wrong report name, wrong item-code field link name, or the item code doesn't exist:<div style='margin-top:6px'>"+failed.join("<br>")+"</div>Open <b>Field discovery</b> below for the real keys.");
   } else if(!rows.length && !invAll.length){
-    setStatus("warn", "No records found for item code <b>"+STATE.itemCode+"</b> in any report. Either this item has no movement, or the item-code field link names in the config are off — check <b>Field discovery</b> below.");
+    setStatus("warn", "No request lines for <b>"+STATE.itemCode+"</b> <span style='opacity:.7'>(build "+BUILD+")</span>."+
+      "<div style='margin-top:6px;font-size:12px'>Sales Order rows: <b>"+((D.so||[]).length)+"</b> · Item Master: <b>"+((D.itemMaster||[]).length)+"</b> · Invoices: <b>"+invAll.length+"</b> · MRs linked to this item: <b>"+Object.keys(ALLOC_BY_MR).length+"</b></div>"+
+      "<div style='margin-top:4px;font-size:12px'>If Item Master ≥ 1 but Sales Order rows = 0, this item's SO lines aren't matching by code — the item exists (it has allocations) but has no matching Sales Order line.</div>");
   } else {
     setStatus(null);
   }
