@@ -209,7 +209,7 @@
 "use strict";
 
 /* Build marker — bump on each deploy so we can confirm the loaded version. */
-var BUILD = "2026-09-28-f";
+var BUILD = "2026-09-28-g";
 
 /* =========================================================================
    1) CONFIGURATION  — edit ONLY this block once you confirm link names.
@@ -295,6 +295,10 @@ var FIELD = {
   // Purchase Receive header. Joined to a row by PO number. Field names are read
   // flexibly (PR/… number, date, PO link, line items) since not yet confirmed.
   purchaseReceive: { report:"API_PURCHASE_RECEIVE", fields:{ po:"Purchase_Order_No" } },
+
+  // Dismissed Sales Order report: per SO+item, the dismissed qty and total qty.
+  // Values read by pattern/name so exact link names don't matter.
+  dismissedSO: { report:"Dismissed_Sales_Order", itemCode:"ITEM_CODE" },
 
   batchTransfer: {                        // inter-branch "transit" movement
     report:  "All_Batch_Transfer_Line_Items",
@@ -562,6 +566,7 @@ var TRANSIT_BY_MR = {};// MR number -> {no, date, qty} for THIS item
 var BILL_BY_MR = {};// MR number -> {no, date} for THIS item (via allocation hub)
 var RECEIVE_BY_MR = {};// MR number -> {no, date} for THIS item (via allocation hub)
 var SO_BY_NO = {};// SO number -> {customer, salesman, date, ordered} (dismissed SOs fetched by number)
+var DISMISS_BY_SO = {};// SO number -> {dismissed, total} for THIS item (Dismissed_Sales_Order)
 var _rerender = null; // set in loadItem so async helpers can re-render
 var _dismissedFetched = {};
 var STATE = { view:"product", itemCode:"", itemName:"", rows:[] };
@@ -601,7 +606,7 @@ function loadItem(code){
   // and take a load token so stale (in-flight) callbacks from a prior item abort.
   var myLoad = ++LOAD_SEQ;
   function stale(){ return myLoad !== LOAD_SEQ; }
-  RAW = {}; MR_MAP = {}; PO_BY_MR = {}; ALLOC_BY_MR = {}; TRANSIT_BY_MR = {}; RECEIVE_BY_MR = {}; BILL_BY_MR = {}; CN_HDR = {}; SO_BY_NO = {}; _dismissedFetched = {}; STATE.rows = [];
+  RAW = {}; MR_MAP = {}; PO_BY_MR = {}; ALLOC_BY_MR = {}; TRANSIT_BY_MR = {}; RECEIVE_BY_MR = {}; BILL_BY_MR = {}; CN_HDR = {}; SO_BY_NO = {}; DISMISS_BY_SO = {}; _dismissedFetched = {}; STATE.rows = [];
   PROG = { sdk: sdkInfo().apiGetAll || sdkInfo().dataGet ? "✓ ready" : "✗ no data method — keys: "+sdkInfo().keys.join(", ") };
   paintProgress(code);
 
@@ -837,6 +842,31 @@ function loadItem(code){
       function(e){ RAW.materialRequest=[]; PROG.materialRequest="✗ "+errToStr(e); console.error("[materialRequest]", e); }
     ).then(rerender);
 
+    // Enrichment H — Dismissed Sales Orders: map SO number -> {dismissed, total}
+    // for this item, from the Dismissed_Sales_Order report.
+    DISMISS_BY_SO = {};
+    PROG.dismissedSO = "…"; paintProgress(code);
+    function buildDismiss(recs){
+      RAW.dismissedSO = recs;
+      recs.forEach(function(r){
+        var so = soNoFrom(r, "Sales_Order");
+        var dq = num(valueByKeyLike(r, ["dismiss"], ["date","box","status","emp","void","phone"]));
+        var tq = num(valueByKeyLike(r, ["total_qty","total","qty"], ["box","dismiss"]));
+        if(so) DISMISS_BY_SO[so] = { dismissed:dq, total:tq };
+      });
+      PROG.dismissedSO = "✓ "+recs.length+" record(s)";
+    }
+    fetchAll(FIELD.dismissedSO.report, eqCriteria(FIELD.dismissedSO.itemCode, code)).then(
+      function(recs){ buildDismiss(recs); rerender(); },
+      function(e){ // fallback: fetch all and keep rows matching this item code
+        fetchAll(FIELD.dismissedSO.report, null).then(function(all){
+          var codeStr = String(code);
+          buildDismiss(all.filter(function(r){ return findByRegex(r, new RegExp("\\b"+codeStr+"\\b")) === codeStr || lv(r.ITEM_CODE)===codeStr; }));
+          rerender();
+        }, function(e2){ RAW.dismissedSO=[]; PROG.dismissedSO="✗ "+errToStr(e2); console.error("[dismissedSO]", e2); });
+      }
+    );
+
     // Discovery — sample the transit-related reports so their (nested) structure
     // can be inspected. Fetched sequentially to avoid concurrency errors.
     (function sampleNext(j){
@@ -928,8 +958,10 @@ function transformAndRender(D){
     var mrHit = MR_MAP[soNo];
     var mrNo  = mrHit ? mrHit.mr : "";
     var alloc = mrNo ? ALLOC_BY_MR[mrNo] : null;   // real per-MR allocation for this item
-    // Dismissed qty against the Sales Order (any "dismiss" column, e.g. Dismissed_Qty).
-    var dismissed = num(valueByKeyLike(r, ["dismiss"], ["date","box","emp","void"]));
+    // Dismissed qty from the Dismissed_Sales_Order report (by SO), else any local
+    // "dismiss" column on the SO line.
+    var dInfo = DISMISS_BY_SO[soNo];
+    var dismissed = dInfo ? dInfo.dismissed : num(valueByKeyLike(r, ["dismiss"], ["date","box","emp","void"]));
     var poHit = mrNo ? PO_BY_MR[mrNo] : null;
     var poNo   = poHit ? poHit.poNo   : fbPoNo;
     var poDate = poHit ? poHit.poDate : fbPoDate;
@@ -988,10 +1020,11 @@ function transformAndRender(D){
     var poHit = PO_BY_MR[mrNo], trHit = TRANSIT_BY_MR[mrNo], rcvHit = RECEIVE_BY_MR[mrNo], billHit = BILL_BY_MR[mrNo];
     var det = SO_BY_NO[si.so], found = !!det; det = det || {};
     if(si.so) needSo.push(si.so);
-    // Dismissed qty: from the SO's own Dismissed field when the line is found,
-    // else assume the whole request was dismissed.
-    var dis = found ? (det.dismissed || 0) : a.reqQty;
-    var soQty = found ? (det.ordered || a.reqQty) : a.reqQty;
+    // Dismissed qty + total from the Dismissed_Sales_Order report (preferred);
+    // else the fetched SO line; else assume the whole request was dismissed.
+    var dInfo = DISMISS_BY_SO[si.so];
+    var dis = dInfo ? dInfo.dismissed : (found ? (det.dismissed || 0) : a.reqQty);
+    var soQty = dInfo ? (dInfo.total || a.reqQty) : (found ? (det.ordered || a.reqQty) : a.reqQty);
     rows.push({
       id: rows.length+1, name:STATE.itemName, code:STATE.itemCode,
       branch: si.branch || "—", customer: det.customer || "", salesman: det.salesman || "—", vendor:"—",
@@ -1193,7 +1226,7 @@ function render(){
    7) DEBUG / FIELD DISCOVERY panel
    ========================================================================= */
 function renderDebug(){
-  var order=[["itemMaster","Item Master"],["salesOrder","Sales Order item-wise"],["materialRequest","Material Request"],["purchaseOrder","PO item-wise"],["purchaseOrderHeader","PO header (Purchase_Order_Report)"],["allocations","Allocations (All_Material_Request_Allocations)"],["allocationQty","Allocation qty subform"],["purchaseTransit","Purchase Transit (API_PURCHASE_TRANSIT)"],["purchaseReceive","Purchase Receive (API_PURCHASE_RECEIVE)"],["bill","Bill (API_of_BILLS)"],["batchTransfer","Batch Transfer"],["invoice","Sales Invoice (API_SALES_INVOICES)"],["creditNote","Credit Note (API_CREDIT_NOTES)"]];
+  var order=[["itemMaster","Item Master"],["salesOrder","Sales Order item-wise"],["materialRequest","Material Request"],["purchaseOrder","PO item-wise"],["purchaseOrderHeader","PO header (Purchase_Order_Report)"],["allocations","Allocations (All_Material_Request_Allocations)"],["allocationQty","Allocation qty subform"],["purchaseTransit","Purchase Transit (API_PURCHASE_TRANSIT)"],["purchaseReceive","Purchase Receive (API_PURCHASE_RECEIVE)"],["bill","Bill (API_of_BILLS)"],["batchTransfer","Batch Transfer"],["invoice","Sales Invoice (API_SALES_INVOICES)"],["creditNote","Credit Note (API_CREDIT_NOTES)"],["dismissedSO","Dismissed Sales Order (Dismissed_Sales_Order)"]];
   // Extra discovery reports (sampled, not yet wired into the table).
   SAMPLE_REPORTS.forEach(function(rep){ order.push([rep, rep]); });
   var out="";
