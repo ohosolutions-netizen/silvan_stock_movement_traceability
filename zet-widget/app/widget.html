@@ -209,7 +209,7 @@
 "use strict";
 
 /* Build marker — bump on each deploy so we can confirm the loaded version. */
-var BUILD = "2026-09-28-b";
+var BUILD = "2026-09-28-c";
 
 /* =========================================================================
    1) CONFIGURATION  — edit ONLY this block once you confirm link names.
@@ -920,6 +920,7 @@ function transformAndRender(D){
     var soNo = lv(r[S.orderNo]);
     var mrHit = MR_MAP[soNo];
     var mrNo  = mrHit ? mrHit.mr : "";
+    var alloc = mrNo ? ALLOC_BY_MR[mrNo] : null;   // real per-MR allocation for this item
     // Dismissed qty against the Sales Order (any "dismiss" column, e.g. Dismissed_Qty).
     var dismissed = num(valueByKeyLike(r, ["dismiss"], ["date","box","emp","void"]));
     var poHit = mrNo ? PO_BY_MR[mrNo] : null;
@@ -951,10 +952,14 @@ function transformAndRender(D){
       rate: num(r["RATE"]),
       unit: lv(r[S.unit]) || "box",
       poGroup: poNo || null,
-      mrQty: ordered,                       // MR requested qty (= SO line qty)
-      // stage presence (documents exist for this MR); quantities filled after the split
+      // MR requested qty = allocation REQ_QTY when allocated, else the SO line qty.
+      mrQty: alloc ? alloc.reqQty : ordered,
+      // Actual per-MR allocated qty flows to PO/Transit/Receive/Bill. When there is
+      // no allocation yet, poQty is filled by the PO split below.
+      _alloc: !!alloc,
+      poQty: alloc ? alloc.qty : 0,
       _hasTransit: !!(trHit && trHit.no), _hasReceive: !!rcvHit, _hasBill: !!billHit,
-      poQty: 0, transitQty: "", grnQty: "", billQty: 0,
+      transitQty: "", grnQty: "", billQty: 0,
       invoices: rowInv
     };
   });
@@ -971,9 +976,9 @@ function transformAndRender(D){
     rows = Object.keys(ALLOC_BY_MR).map(function(mrNo, i){
       var a = ALLOC_BY_MR[mrNo], si = mrToSo[mrNo] || {};
       var poHit = PO_BY_MR[mrNo], trHit = TRANSIT_BY_MR[mrNo], rcvHit = RECEIVE_BY_MR[mrNo], billHit = BILL_BY_MR[mrNo];
-      var q = a.reqQty;                          // per-item allocated qty (reliable)
+      var q = a.qty || a.reqQty;                 // actual per-item allocated qty
       var det = SO_BY_NO[si.so] || {};           // dismissed SO details fetched by number
-      var disQty = q;                            // dismissed qty = this item's allocated qty
+      var disQty = a.reqQty || q;                // dismissed qty = this item's requested qty
       return {
         id:i+1, name:STATE.itemName, code:STATE.itemCode,
         branch: si.branch || "—", customer: det.customer || "", salesman: det.salesman || "—", vendor:"—",
@@ -985,6 +990,7 @@ function transformAndRender(D){
         grn: rcvHit ? [rcvHit.no, rcvHit.date] : ["",""],
         bill: billHit ? [billHit.no, billHit.date] : ["",""],
         ordered:disQty, dismissed:disQty, rate:0, unit:"box", poGroup: poHit?poHit.poNo:null,
+        _alloc:true,
         _hasTransit: !!(trHit&&trHit.no), _hasReceive: !!rcvHit, _hasBill: !!billHit,
         mrQty:a.reqQty, poQty:q, transitQty: trHit?q:"", grnQty: rcvHit?q:"", billQty: billHit?q:0,
         invoices:[]
@@ -1007,12 +1013,17 @@ function transformAndRender(D){
   rows.forEach(function(row){ if(row.poGroup){ (byPo[row.poGroup]=byPo[row.poGroup]||[]).push(row); } });
   Object.keys(byPo).forEach(function(pn){
     if(poTotal[pn]==null) return;                              // no PO -> no allocation
-    var grp = byPo[pn].slice().sort(function(a,b){ return num(b.mrQty) - num(a.mrQty); }); // bigger first
-    var remaining = poTotal[pn];
-    grp.forEach(function(row){
-      var give = Math.max(0, Math.min(num(row.mrQty), remaining));
-      row.poQty = give; remaining -= give;
-    });
+    var grp = byPo[pn];
+    // Rows with a real allocation keep their actual qty; split only the remaining
+    // PO quantity across the not-yet-allocated rows, largest request first.
+    var used = grp.reduce(function(a,r){ return a + (r._alloc ? num(r.poQty) : 0); }, 0);
+    var remaining = poTotal[pn] - used;
+    grp.filter(function(r){ return !r._alloc; })
+       .sort(function(a,b){ return num(b.mrQty) - num(a.mrQty); })
+       .forEach(function(row){
+         var give = Math.max(0, Math.min(num(row.mrQty), remaining));
+         row.poQty = give; remaining -= give;
+       });
   });
   // Propagate the allocated quantity to the downstream stages this MR reached.
   rows.forEach(function(row){
