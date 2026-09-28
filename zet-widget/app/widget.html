@@ -209,7 +209,7 @@
 "use strict";
 
 /* Build marker — bump on each deploy so we can confirm the loaded version. */
-var BUILD = "2026-09-28-h";
+var BUILD = "2026-09-28-i";
 
 /* =========================================================================
    1) CONFIGURATION  — edit ONLY this block once you confirm link names.
@@ -830,11 +830,12 @@ function loadItem(code){
         all.forEach(function(rec){
           var mr = lv(rec[MF.mrNo]), date = lv(rec[MF.date]);
           var branch = lv(rec[MF.destBranch]) || lv(rec[MF.srcBranch]);
+          var salesman = lv(rec["Sales_Order.Sales_Man"]) || valueByKeyLike(rec, ["sales_man","salesman"], []);
           var refs = rec[MF.soRefs];
           var list = Array.isArray(refs) ? refs : (refs ? [refs] : []);
           list.forEach(function(ref){
             var soNo = (ref && typeof ref==="object") ? lv(ref[MF.soOrderNo] || ref.zc_display_value || ref.display_value) : lv(ref);
-            if(soNo) MR_MAP[soNo] = { mr:mr, date:date, branch:branch };
+            if(soNo) MR_MAP[soNo] = { mr:mr, date:date, branch:branch, salesman:salesman };
           });
         });
         PROG.materialRequest = "✓ "+all.length+" record(s)";
@@ -852,7 +853,9 @@ function loadItem(code){
         var so = soNoFrom(r, "Sales_Order");
         var dq = num(valueByKeyLike(r, ["dismiss"], ["date","box","status","emp","void","phone"]));
         var tq = num(valueByKeyLike(r, ["total_qty","total","qty"], ["box","dismiss"]));
-        if(so) DISMISS_BY_SO[so] = { dismissed:dq, total:tq };
+        var cust = valueByKeyLike(r, ["customer"], ["gst","address","phone","mobile","name."]);
+        var sm   = valueByKeyLike(r, ["sales_man","salesman","sales man"], []);
+        if(so) DISMISS_BY_SO[so] = { dismissed:dq, total:tq, customer:cust, salesman:sm };
       });
       PROG.dismissedSO = "✓ "+recs.length+" record(s)";
     }
@@ -1029,7 +1032,10 @@ function transformAndRender(D){
     var soQty = dInfo ? (dInfo.total || a.reqQty) : (found ? (det.ordered || a.reqQty) : a.reqQty);
     rows.push({
       id: rows.length+1, name:STATE.itemName, code:STATE.itemCode,
-      branch: si.branch || "—", customer: det.customer || invCustBySo[si.so] || "", salesman: det.salesman || "—", vendor:"—",
+      branch: si.branch || "—",
+      customer: det.customer || (dInfo && dInfo.customer) || invCustBySo[si.so] || "",
+      salesman: det.salesman || (dInfo && dInfo.salesman) || si.salesman || "—",
+      vendor:"—",
       so:[ si.so||"", det.date || si.date || "" ], mr:[ mrNo, si.date||"" ],
       po: poHit ? [poHit.poNo, poHit.poDate] : ["",""],
       transit: (trHit&&trHit.no) ? [trHit.no, trHit.date, "received"] : ["","",""],
