@@ -209,7 +209,7 @@
 "use strict";
 
 /* Build marker — bump on each deploy so we can confirm the loaded version. */
-var BUILD = "2026-09-28-d";
+var BUILD = "2026-09-28-e";
 
 /* =========================================================================
    1) CONFIGURATION  — edit ONLY this block once you confirm link names.
@@ -952,10 +952,10 @@ function transformAndRender(D){
       rate: num(r["RATE"]),
       unit: lv(r[S.unit]) || "box",
       poGroup: poNo || null,
-      // MR requested qty = allocation REQ_QTY when known, else the SO line qty.
-      // PO/Transit/Receive/Bill quantities are the fill-bigger-first split of the
-      // PO total by this request size, computed below.
+      // MR = requested qty. PO = fill-bigger-first split of the PO total (below).
+      // Transit/Receive/Bill = the actual Zoho allocation QTY (_allocQty).
       mrQty: alloc ? alloc.reqQty : ordered,
+      _allocQty: alloc ? alloc.qty : null,
       _hasTransit: !!(trHit && trHit.no), _hasReceive: !!rcvHit, _hasBill: !!billHit,
       poQty: 0, transitQty: "", grnQty: "", billQty: 0,
       invoices: rowInv
@@ -988,6 +988,7 @@ function transformAndRender(D){
         grn: rcvHit ? [rcvHit.no, rcvHit.date] : ["",""],
         bill: billHit ? [billHit.no, billHit.date] : ["",""],
         ordered:disQty, dismissed:disQty, rate:0, unit:"box", poGroup: poHit?poHit.poNo:null,
+        _allocQty: (a.qty!=null ? a.qty : a.reqQty),
         _hasTransit: !!(trHit&&trHit.no), _hasReceive: !!rcvHit, _hasBill: !!billHit,
         mrQty:a.reqQty, poQty:0, transitQty:"", grnQty:"", billQty:0,
         invoices:[]
@@ -1020,9 +1021,11 @@ function transformAndRender(D){
       row.poQty = give; remaining -= give;
     });
   });
-  // Propagate the allocated quantity to the downstream stages this MR reached.
+  // Transit / Receive / Bill quantities come from the actual Zoho allocation QTY
+  // (fall back to the PO split only if an allocation qty isn't available). PO keeps
+  // the fill-bigger-first split (row.poQty).
   rows.forEach(function(row){
-    var q = row.poQty;
+    var q = (row._allocQty != null) ? row._allocQty : row.poQty;
     row.transitQty = row._hasTransit ? q : "";
     row.grnQty     = row._hasReceive ? q : "";
     row.billQty    = row._hasBill    ? q : 0;
