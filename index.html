@@ -209,7 +209,7 @@
 "use strict";
 
 /* Build marker — bump on each deploy so we can confirm the loaded version. */
-var BUILD = "2026-09-28-g";
+var BUILD = "2026-09-28-h";
 
 /* =========================================================================
    1) CONFIGURATION  — edit ONLY this block once you confirm link names.
@@ -919,11 +919,13 @@ function transformAndRender(D){
   // Invoices from API_SALES_INVOICES: each record has an invoice number, date, an
   // SO reference, and a Line_Item subform. Keep subform lines for this item and
   // remember which SO each invoice belongs to (for per-row attribution).
-  var IF = F.invoice.fields, invAll = [];
+  var IF = F.invoice.fields, invAll = [], invCustBySo = {};
   (D.inv||[]).forEach(function(rec){
     var no   = lv(rec[IF.number]) || valueByKeyLike(rec, ["invoice_no","invoice_number","sales_invoice_no","bill_no"], ["line","item"]);
     var date = lv(rec[IF.date])   || valueByKeyLike(rec, ["date"], ["added_time","modified","updat"]);
     var soNo = soNoFrom(rec, IF.soRefs);
+    var cust = lv(rec.Customer);
+    if(soNo && cust && !invCustBySo[soNo]) invCustBySo[soNo] = cust;
     (rec[IF.lineItems]||[]).forEach(function(li){
       if(String(lv(li[IF.liItemCode])) === String(STATE.itemCode)){
         invAll.push({ no:no, date:date, qty:num(li[IF.liQty]), so:soNo, creditNotes:[] });
@@ -1027,7 +1029,7 @@ function transformAndRender(D){
     var soQty = dInfo ? (dInfo.total || a.reqQty) : (found ? (det.ordered || a.reqQty) : a.reqQty);
     rows.push({
       id: rows.length+1, name:STATE.itemName, code:STATE.itemCode,
-      branch: si.branch || "—", customer: det.customer || "", salesman: det.salesman || "—", vendor:"—",
+      branch: si.branch || "—", customer: det.customer || invCustBySo[si.so] || "", salesman: det.salesman || "—", vendor:"—",
       so:[ si.so||"", det.date || si.date || "" ], mr:[ mrNo, si.date||"" ],
       po: poHit ? [poHit.poNo, poHit.poDate] : ["",""],
       transit: (trHit&&trHit.no) ? [trHit.no, trHit.date, "received"] : ["","",""],
@@ -1037,7 +1039,7 @@ function transformAndRender(D){
       _allocQty: (a.qty!=null ? a.qty : a.reqQty),
       _hasTransit: !!(trHit&&trHit.no), _hasReceive: !!rcvHit, _hasBill: !!billHit,
       mrQty:a.reqQty, poQty:0, transitQty:"", grnQty:"", billQty:0,
-      invoices:[]
+      invoices: (invBySo[si.so] || []).slice()
     });
   });
   if(needSo.length) fetchDismissedSO(needSo);
