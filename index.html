@@ -209,7 +209,7 @@
 "use strict";
 
 /* Build marker — bump on each deploy so we can confirm the loaded version. */
-var BUILD = "2026-09-28-k";
+var BUILD = "2026-09-28-l";
 
 /* =========================================================================
    1) CONFIGURATION  — edit ONLY this block once you confirm link names.
@@ -990,8 +990,8 @@ function transformAndRender(D){
     var dInfo = DISMISS_BY_SO[soNo];
     var dismissed = dInfo ? dInfo.dismissed : num(valueByKeyLike(r, ["dismiss"], ["date","box","emp","void"]));
     var poHit = mrNo ? PO_BY_MR[mrNo] : null;
-    var poNo   = poHit ? poHit.poNo   : fbPoNo;
-    var poDate = poHit ? poHit.poDate : fbPoDate;
+    var poNo   = poHit ? poHit.poNo   : "";   // no PO for this MR -> empty (no fallback)
+    var poDate = poHit ? poHit.poDate : "";
     // Stage document LISTS for THIS row's material request (one MR can have many).
     var trList   = mrNo ? (TRANSIT_BY_MR[mrNo] || []) : [];
     var rcvList  = mrNo ? (RECEIVE_BY_MR[mrNo] || []) : [];
