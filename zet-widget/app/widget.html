@@ -209,7 +209,7 @@
 "use strict";
 
 /* Build marker — bump on each deploy so we can confirm the loaded version. */
-var BUILD = "2026-09-28-j";
+var BUILD = "2026-09-28-k";
 
 /* =========================================================================
    1) CONFIGURATION  — edit ONLY this block once you confirm link names.
@@ -388,12 +388,14 @@ function money(n){ return "₹"+(Number(n)||0).toLocaleString('en-IN'); }
 // Record ID referenced by a lookup field value ({ID, zc_display_value} | "").
 function lookupId(v){ return (v && typeof v==="object") ? (v.ID || v.id || "") : (typeof v==="string" && /^\d{10,}$/.test(v) ? v : ""); }
 function uniq(a){ return a.filter(function(x,i){ return x && a.indexOf(x)===i; }); }
-// Append a stage document to a per-MR list, one entry per document number
-// (accumulating qty if the same document recurs).
+// Append a stage document to a per-MR list, ONE entry per document number.
+// The same document can be referenced by several allocation records (transit,
+// receive and bill stages all carry the transit link), so keep the first qty
+// rather than summing — otherwise the quantity double/triple counts.
 function pushDoc(map, mr, no, date, qty){
   if(!no) return;
   var list = map[mr] = map[mr] || [];
-  for(var i=0;i<list.length;i++){ if(list[i].no===no){ list[i].qty += (qty||0); return; } }
+  for(var i=0;i<list.length;i++){ if(list[i].no===no){ if(!list[i].qty && qty) list[i].qty=qty; return; } }
   list.push({ no:no, date:date||"", qty:(qty||0) });
 }
 
@@ -859,12 +861,15 @@ function loadItem(code){
     function buildDismiss(recs){
       RAW.dismissedSO = recs;
       recs.forEach(function(r){
-        var so = soNoFrom(r, "Sales_Order");
-        var dq = num(valueByKeyLike(r, ["dismiss"], ["date","box","status","emp","void","phone"]));
-        var tq = num(valueByKeyLike(r, ["total_qty","total","qty"], ["box","dismiss"]));
-        var cust = valueByKeyLike(r, ["customer"], ["gst","address","phone","mobile","name."]);
-        var sm   = valueByKeyLike(r, ["sales_man","salesman","sales man"], []);
-        if(so) DISMISS_BY_SO[so] = { dismissed:dq, total:tq, customer:cust, salesman:sm };
+        var lk = r.Lookup;
+        var so = (lk && typeof lk==="object") ? lv(lk.Order_No || lk.zc_display_value) : soNoFrom(r, "Lookup");
+        if(!so) return;
+        var dq = num(r.Dismissed_Qty != null ? r.Dismissed_Qty : valueByKeyLike(r, ["dismissed_qty"], ["box"]));
+        var tq = num(r.QTY != null ? r.QTY : valueByKeyLike(r, ["total_qty"], ["box"]));
+        var custObj = r["Lookup.Customer"];
+        var cust = (custObj && custObj.Name) ? custObj.Name : lv(custObj);
+        var sm   = lv(r["Lookup.Sales_Man"]);
+        DISMISS_BY_SO[so] = { dismissed:dq, total:tq, customer:cust, salesman:sm };
       });
       PROG.dismissedSO = "✓ "+recs.length+" record(s)";
     }
@@ -966,6 +971,14 @@ function transformAndRender(D){
   var btNo   = D.bt.length ? lv(D.bt[0][F.batchTransfer.fields.request]) : "";
   var btQty  = D.bt.reduce(function(a,r){ return a+num(r[F.batchTransfer.fields.transferQty]); },0);
 
+  // Requested qty per Sales Order (the MR request), used for the MR column and the
+  // PO fill-bigger-first split. From the SO report, the Dismissed report, and any
+  // SO fetched by number — NOT from the allocation's REQ_QTY (which is per-line).
+  var SO_REQ = {};
+  (D.so||[]).forEach(function(r){ var so=lv(r[S.orderNo]); if(so) SO_REQ[so]=num(r[S.orderedQty]); });
+  Object.keys(DISMISS_BY_SO).forEach(function(so){ if(SO_REQ[so]==null && DISMISS_BY_SO[so].total) SO_REQ[so]=DISMISS_BY_SO[so].total; });
+  Object.keys(SO_BY_NO).forEach(function(so){ if(SO_REQ[so]==null && SO_BY_NO[so].ordered) SO_REQ[so]=SO_BY_NO[so].ordered; });
+
   var rows = D.so.map(function(r, i){
     var ordered = num(r[S.orderedQty]);
     var soNo = lv(r[S.orderNo]);
@@ -1003,9 +1016,9 @@ function transformAndRender(D){
       rate: num(r["RATE"]),
       unit: lv(r[S.unit]) || "box",
       poGroup: poNo || null,
-      // MR = requested qty. PO = fill-bigger-first split of the PO total (below).
-      // Transit/Receive/Bill quantities come from their document lists.
-      mrQty: alloc ? alloc.reqQty : ordered,
+      // MR = the Sales Order's requested qty. PO = fill-bigger-first split of the
+      // PO total (below). Transit/Receive/Bill quantities come from their lists.
+      mrQty: (SO_REQ[soNo] != null ? SO_REQ[soNo] : ordered),
       poQty: 0,
       billQty: billList.reduce(function(a,x){ return a+num(x.qty); }, 0),
       invoices: rowInv
@@ -1035,8 +1048,9 @@ function transformAndRender(D){
     // Dismissed qty + total from the Dismissed_Sales_Order report (preferred);
     // else the fetched SO line; else assume the whole request was dismissed.
     var dInfo = DISMISS_BY_SO[si.so];
-    var dis = dInfo ? dInfo.dismissed : (found ? (det.dismissed || 0) : a.reqQty);
-    var soQty = dInfo ? (dInfo.total || a.reqQty) : (found ? (det.ordered || a.reqQty) : a.reqQty);
+    var reqQ = (SO_REQ[si.so] != null ? SO_REQ[si.so] : a.reqQty);   // MR request = SO qty
+    var dis = dInfo ? dInfo.dismissed : (found ? (det.dismissed || 0) : reqQ);
+    var soQty = reqQ;
     rows.push({
       id: rows.length+1, name:STATE.itemName, code:STATE.itemCode,
       branch: si.branch || "—",
@@ -1047,7 +1061,7 @@ function transformAndRender(D){
       po: poHit ? [poHit.poNo, poHit.poDate] : ["",""],
       transitList: trList, grnList: rcvList, billList: billList,
       ordered:soQty, dismissed:dis, rate:0, unit:"box", poGroup: poHit?poHit.poNo:null,
-      mrQty:a.reqQty, poQty:0,
+      mrQty:reqQ, poQty:0,
       billQty: billList.reduce(function(x,y){ return x+num(y.qty); }, 0),
       invoices: (invBySo[si.so] || []).slice()
     });
