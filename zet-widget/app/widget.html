@@ -172,8 +172,8 @@
 
   <div class="viewbar">
     <div class="seg">
-      <button data-view="product" id="v-product" class="on">Product summary</button>
-      <button data-view="lines" id="v-lines">Request lines</button>
+      <button data-view="lines" id="v-lines" class="on">Request lines</button>
+      <button data-view="product" id="v-product">Product summary</button>
     </div>
     <div class="result-count" id="count"></div>
   </div>
@@ -195,13 +195,10 @@
 
   <div class="foot-note">Live data &middot; Silvan Tiles / Zoho Creator. Filtered by item code passed from the page. &middot; <span id="build-tag"></span></div>
 
-  <!-- ============ FIELD DISCOVERY / DEBUG ============ -->
-  <details class="debug" id="debug">
-    <summary>🔧 Field discovery &amp; debug — open this once to read the real field link names</summary>
-    <div class="db-body">
-      <p class="db-mini">For each report below, this shows the actual field keys returned by the Creator API for the current item code. Copy these back so the <code>FIELD</code> config can be locked to your exact link names. (Add <code>?debug=1</code> to force this even when data loads fine.)</p>
-      <div id="debug-out"></div>
-    </div>
+  <!-- Diagnostics panel (shown only with ?debug=1) -->
+  <details class="debug" id="debug" hidden>
+    <summary>🔧 Field discovery &amp; debug</summary>
+    <div class="db-body"><div id="debug-out"></div></div>
   </details>
 </div>
 
@@ -209,7 +206,7 @@
 "use strict";
 
 /* Build marker — bump on each deploy so we can confirm the loaded version. */
-var BUILD = "2026-09-28-m";
+var BUILD = "2026-09-28-n";
 
 /* =========================================================================
    1) CONFIGURATION  — edit ONLY this block once you confirm link names.
@@ -581,7 +578,7 @@ var SO_BY_NO = {};// SO number -> {customer, salesman, date, ordered} (dismissed
 var DISMISS_BY_SO = {};// SO number -> {dismissed, total} for THIS item (Dismissed_Sales_Order)
 var _rerender = null; // set in loadItem so async helpers can re-render
 var _dismissedFetched = {};
-var STATE = { view:"product", itemCode:"", itemName:"", rows:[] };
+var STATE = { view:"lines", itemCode:"", itemName:"", rows:[] };
 
 // Extract SO number, MR number and date from a Material Request record by value
 // pattern, so we don't depend on the report's column link names.
@@ -682,15 +679,6 @@ function loadItem(code){
         );
       })(0);
     }
-
-    // Enrichment A — Batch Transfer (transit): filter by item master record ID.
-    PROG.batchTransfer="…";
-    var itemId = core.itemMaster.length ? lv(core.itemMaster[0].ID) : "";
-    var btCrit = itemId ? '('+FIELD.batchTransfer.itemLookupField+' == "'+itemId+'")' : null;
-    fetchAll(FIELD.batchTransfer.report, btCrit).then(
-      function(bt){ RAW.batchTransfer=bt; PROG.batchTransfer="✓ "+bt.length+" record(s)"; },
-      function(e){ RAW.batchTransfer=[]; PROG.batchTransfer="✗ "+((e&&(e.message||e.code))||"error"); console.error("[batchTransfer]", e); }
-    ).then(rerender);
 
     // Enrichment B — if the subform-criteria credit-note fetch returned nothing
     // (some SDKs don't support subform-field criteria), refetch all credit notes
@@ -1257,6 +1245,8 @@ function render(){
    7) DEBUG / FIELD DISCOVERY panel
    ========================================================================= */
 function renderDebug(){
+  var dbg = document.getElementById('debug'), out = document.getElementById('debug-out');
+  if(!out || (dbg && dbg.hidden)) return;   // diagnostics off unless ?debug=1
   var order=[["itemMaster","Item Master"],["salesOrder","Sales Order item-wise"],["materialRequest","Material Request"],["purchaseOrder","PO item-wise"],["purchaseOrderHeader","PO header (Purchase_Order_Report)"],["allocations","Allocations (All_Material_Request_Allocations)"],["allocationQty","Allocation qty subform"],["purchaseTransit","Purchase Transit (API_PURCHASE_TRANSIT)"],["purchaseReceive","Purchase Receive (API_PURCHASE_RECEIVE)"],["bill","Bill (API_of_BILLS)"],["batchTransfer","Batch Transfer"],["invoice","Sales Invoice (API_SALES_INVOICES)"],["creditNote","Credit Note (API_CREDIT_NOTES)"],["dismissedSO","Dismissed Sales Order (Dismissed_Sales_Order)"]];
   // Extra discovery reports (sampled, not yet wired into the table).
   SAMPLE_REPORTS.forEach(function(rep){ order.push([rep, rep]); });
@@ -1352,7 +1342,8 @@ function boot(){
   $('test-go').addEventListener('click',function(){ var c=$('test-code').value.trim(); if(c) loadItem(c); });
   $('test-code').addEventListener('keydown',function(e){ if(e.key==="Enter"){ var c=e.target.value.trim(); if(c) loadItem(c);} });
 
-  $('debug').open = true; // auto-open during integration; collapse later for production
+  // Diagnostics only when explicitly requested with ?debug=1
+  if(location.search.indexOf("debug=1")>-1){ var dbg=$('debug'); if(dbg){ dbg.hidden=false; dbg.open=true; } }
 
   setStatus("info","Loading Creator SDK… <span style='opacity:.7'>(build "+BUILD+")</span>");
 
