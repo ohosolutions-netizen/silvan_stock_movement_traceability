@@ -209,7 +209,7 @@
 "use strict";
 
 /* Build marker — bump on each deploy so we can confirm the loaded version. */
-var BUILD = "2026-09-28-e";
+var BUILD = "2026-09-28-f";
 
 /* =========================================================================
    1) CONFIGURATION  — edit ONLY this block once you confirm link names.
@@ -870,7 +870,14 @@ function fetchDismissedSO(soNos){
   fetchAll(FIELD.salesOrder.report, crit).then(function(sos){
     (sos||[]).forEach(function(r){
       var no = lv(r[S.orderNo]); if(!no) return;
-      SO_BY_NO[no] = { customer:lv(r[S.customer]), salesman:lv(r[S.salesman]), date:lv(r[S.orderDate]), ordered:num(r[S.orderedQty]) };
+      // Only keep the line for the current item (an SO can have several items).
+      var ic = (r[S.name] && typeof r[S.name]==="object") ? lv(r[S.name].Item_Code) : "";
+      if(ic && String(ic) !== String(STATE.itemCode)) return;
+      SO_BY_NO[no] = {
+        customer: lv(r[S.customer]), salesman: lv(r[S.salesman]), date: lv(r[S.orderDate]),
+        ordered: num(r[S.orderedQty]),
+        dismissed: num(valueByKeyLike(r, ["dismiss"], ["date","box","emp","void"]))
+      };
     });
     if(_rerender) _rerender();
   }).catch(function(e){ console.error("[dismissed SO by number]", e); });
@@ -966,37 +973,41 @@ function transformAndRender(D){
   // (a dismissed SO has no MR but must still be shown).
   rows = rows.filter(function(x){ return (x.mr && x.mr[0]) || x.dismissed > 0; });
 
-  // If no Sales Order line matched but the item has allocations (MRs), build the
-  // rows from the MR/allocation side so the item still appears (SO no via MR map).
-  if(!rows.length && Object.keys(ALLOC_BY_MR).length){
-    var mrToSo = {};
-    Object.keys(MR_MAP).forEach(function(so){ var m=MR_MAP[so]; if(m&&m.mr) mrToSo[m.mr]={so:so, date:m.date, branch:m.branch}; });
-    rows = Object.keys(ALLOC_BY_MR).map(function(mrNo, i){
-      var a = ALLOC_BY_MR[mrNo], si = mrToSo[mrNo] || {};
-      var poHit = PO_BY_MR[mrNo], trHit = TRANSIT_BY_MR[mrNo], rcvHit = RECEIVE_BY_MR[mrNo], billHit = BILL_BY_MR[mrNo];
-      var q = a.qty || a.reqQty;                 // actual per-item allocated qty
-      var det = SO_BY_NO[si.so] || {};           // dismissed SO details fetched by number
-      var disQty = a.reqQty || q;                // dismissed qty = this item's requested qty
-      return {
-        id:i+1, name:STATE.itemName, code:STATE.itemCode,
-        branch: si.branch || "—", customer: det.customer || "", salesman: det.salesman || "—", vendor:"—",
-        // Sales Order line was dismissed -> show its qty as Dismissed; customer/
-        // salesman/date come from the dismissed SO (fetched by number).
-        so:[ si.so||"", det.date || si.date || "" ], mr:[ mrNo, si.date||"" ],
-        po: poHit ? [poHit.poNo, poHit.poDate] : ["",""],
-        transit: (trHit&&trHit.no) ? [trHit.no, trHit.date, "received"] : ["","",""],
-        grn: rcvHit ? [rcvHit.no, rcvHit.date] : ["",""],
-        bill: billHit ? [billHit.no, billHit.date] : ["",""],
-        ordered:disQty, dismissed:disQty, rate:0, unit:"box", poGroup: poHit?poHit.poNo:null,
-        _allocQty: (a.qty!=null ? a.qty : a.reqQty),
-        _hasTransit: !!(trHit&&trHit.no), _hasReceive: !!rcvHit, _hasBill: !!billHit,
-        mrQty:a.reqQty, poQty:0, transitQty:"", grnQty:"", billQty:0,
-        invoices:[]
-      };
+  // Add a row for every allocation MR that has NO Sales Order row yet — this
+  // happens when its SO was dismissed (fully or partially) and dropped out of the
+  // item-wise report. Build it from the MR/allocation side, and recover the SO
+  // (customer/salesman/dismissed qty) by fetching it by number.
+  var mrToSo = {};
+  Object.keys(MR_MAP).forEach(function(so){ var m=MR_MAP[so]; if(m&&m.mr) mrToSo[m.mr]={so:so, date:m.date, branch:m.branch}; });
+  var shownMr = {};
+  rows.forEach(function(r){ if(r.mr && r.mr[0]) shownMr[r.mr[0]] = true; });
+  var needSo = [];
+  Object.keys(ALLOC_BY_MR).forEach(function(mrNo){
+    if(shownMr[mrNo]) return;
+    var a = ALLOC_BY_MR[mrNo], si = mrToSo[mrNo] || {};
+    var poHit = PO_BY_MR[mrNo], trHit = TRANSIT_BY_MR[mrNo], rcvHit = RECEIVE_BY_MR[mrNo], billHit = BILL_BY_MR[mrNo];
+    var det = SO_BY_NO[si.so], found = !!det; det = det || {};
+    if(si.so) needSo.push(si.so);
+    // Dismissed qty: from the SO's own Dismissed field when the line is found,
+    // else assume the whole request was dismissed.
+    var dis = found ? (det.dismissed || 0) : a.reqQty;
+    var soQty = found ? (det.ordered || a.reqQty) : a.reqQty;
+    rows.push({
+      id: rows.length+1, name:STATE.itemName, code:STATE.itemCode,
+      branch: si.branch || "—", customer: det.customer || "", salesman: det.salesman || "—", vendor:"—",
+      so:[ si.so||"", det.date || si.date || "" ], mr:[ mrNo, si.date||"" ],
+      po: poHit ? [poHit.poNo, poHit.poDate] : ["",""],
+      transit: (trHit&&trHit.no) ? [trHit.no, trHit.date, "received"] : ["","",""],
+      grn: rcvHit ? [rcvHit.no, rcvHit.date] : ["",""],
+      bill: billHit ? [billHit.no, billHit.date] : ["",""],
+      ordered:soQty, dismissed:dis, rate:0, unit:"box", poGroup: poHit?poHit.poNo:null,
+      _allocQty: (a.qty!=null ? a.qty : a.reqQty),
+      _hasTransit: !!(trHit&&trHit.no), _hasReceive: !!rcvHit, _hasBill: !!billHit,
+      mrQty:a.reqQty, poQty:0, transitQty:"", grnQty:"", billQty:0,
+      invoices:[]
     });
-    // Recover customer/salesman/date for the dismissed SOs (async -> re-renders).
-    fetchDismissedSO(rows.map(function(x){ return x.so && x.so[0]; }));
-  }
+  });
+  if(needSo.length) fetchDismissedSO(needSo);
 
   // Quantity allocation: split each PO's total item quantity across its MR rows,
   // largest request first (PO 50 over MR 30 + MR 20 -> 30 and 20; PO 49 -> 30 and
