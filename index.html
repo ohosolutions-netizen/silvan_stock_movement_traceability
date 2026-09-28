@@ -209,7 +209,7 @@
 "use strict";
 
 /* Build marker — bump on each deploy so we can confirm the loaded version. */
-var BUILD = "2026-09-28-l";
+var BUILD = "2026-09-28-m";
 
 /* =========================================================================
    1) CONFIGURATION  — edit ONLY this block once you confirm link names.
@@ -384,6 +384,8 @@ function lv(v){
 }
 function num(v){ var n=parseFloat(lv(v).toString().replace(/[^0-9.\-]/g,"")); return isNaN(n)?0:n; }
 function money(n){ return "₹"+(Number(n)||0).toLocaleString('en-IN'); }
+// A status is "void" when it says void but not "non void".
+function isVoid(v){ var s=lv(v); return /void/i.test(s) && !/non[\s-]*void/i.test(s); }
 
 // Record ID referenced by a lookup field value ({ID, zc_display_value} | "").
 function lookupId(v){ return (v && typeof v==="object") ? (v.ID || v.id || "") : (typeof v==="string" && /^\d{10,}$/.test(v) ? v : ""); }
@@ -938,6 +940,7 @@ function transformAndRender(D){
   // remember which SO each invoice belongs to (for per-row attribution).
   var IF = F.invoice.fields, invAll = [], invCustBySo = {};
   (D.inv||[]).forEach(function(rec){
+    if(isVoid(rec.Status)) return;   // skip void invoices
     var no   = lv(rec[IF.number]) || valueByKeyLike(rec, ["invoice_no","invoice_number","sales_invoice_no","bill_no"], ["line","item"]);
     var date = lv(rec[IF.date])   || valueByKeyLike(rec, ["date"], ["added_time","modified","updat"]);
     var soNo = soNoFrom(rec, IF.soRefs);
@@ -955,6 +958,7 @@ function transformAndRender(D){
   // Credit notes from API_CREDIT_NOTES (item-code join; can't tie to one invoice).
   var CF = F.creditNote.fields, creditNotes = [];
   (D.cn||[]).forEach(function(cnRec){
+    if(isVoid(cnRec.Credit_Note_Status)) return;   // skip void credit notes
     var no = lv(cnRec[CF.number]), date = lv(cnRec[CF.date]);
     (cnRec[CF.lineItems] || []).forEach(function(li){
       if(String(lv(li[CF.liItemCode])) === String(STATE.itemCode)){
