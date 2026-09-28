@@ -209,7 +209,7 @@
 "use strict";
 
 /* Build marker — bump on each deploy so we can confirm the loaded version. */
-var BUILD = "2026-09-23-i";
+var BUILD = "2026-09-28-a";
 
 /* =========================================================================
    1) CONFIGURATION  — edit ONLY this block once you confirm link names.
@@ -561,6 +561,9 @@ var ALLOC_BY_MR = {};// MR number -> {qty, reqQty, allocIds:[]} for THIS item
 var TRANSIT_BY_MR = {};// MR number -> {no, date, qty} for THIS item
 var BILL_BY_MR = {};// MR number -> {no, date} for THIS item (via allocation hub)
 var RECEIVE_BY_MR = {};// MR number -> {no, date} for THIS item (via allocation hub)
+var SO_BY_NO = {};// SO number -> {customer, salesman, date, ordered} (dismissed SOs fetched by number)
+var _rerender = null; // set in loadItem so async helpers can re-render
+var _dismissedFetched = {};
 var STATE = { view:"product", itemCode:"", itemName:"", rows:[] };
 
 // Extract SO number, MR number and date from a Material Request record by value
@@ -598,7 +601,7 @@ function loadItem(code){
   // and take a load token so stale (in-flight) callbacks from a prior item abort.
   var myLoad = ++LOAD_SEQ;
   function stale(){ return myLoad !== LOAD_SEQ; }
-  RAW = {}; MR_MAP = {}; PO_BY_MR = {}; ALLOC_BY_MR = {}; TRANSIT_BY_MR = {}; RECEIVE_BY_MR = {}; BILL_BY_MR = {}; CN_HDR = {}; STATE.rows = [];
+  RAW = {}; MR_MAP = {}; PO_BY_MR = {}; ALLOC_BY_MR = {}; TRANSIT_BY_MR = {}; RECEIVE_BY_MR = {}; BILL_BY_MR = {}; CN_HDR = {}; SO_BY_NO = {}; _dismissedFetched = {}; STATE.rows = [];
   PROG = { sdk: sdkInfo().apiGetAll || sdkInfo().dataGet ? "✓ ready" : "✗ no data method — keys: "+sdkInfo().keys.join(", ") };
   paintProgress(code);
 
@@ -638,6 +641,7 @@ function loadItem(code){
       transformAndRender({itemMaster:core.itemMaster, so:core.so, po:core.po, inv:core.inv, cn:core.cn, mr:core.mr, bt:RAW.batchTransfer||[]});
       renderDebug();
     }
+    _rerender = rerender;
     // Render essentials immediately; enrichments below re-render when they land.
     rerender();
 
@@ -855,6 +859,23 @@ function loadItem(code){
    5) TRANSFORM raw records -> the row shape the table renderers use.
    One "request line" == one Sales Order line record.
    ========================================================================= */
+// Fetch dismissed Sales Order lines by SO number (they aren't returned by the
+// item-code filter) to recover customer / salesman / date / ordered qty.
+function fetchDismissedSO(soNos){
+  var need = soNos.filter(function(n){ return n && !_dismissedFetched[n]; });
+  if(!need.length) return;
+  need.forEach(function(n){ _dismissedFetched[n] = true; });
+  var S = FIELD.salesOrder.fields;
+  var crit = "(" + need.map(function(n){ return S.orderNo+' == "'+String(n).replace(/"/g,'\\"')+'"'; }).join(" || ") + ")";
+  fetchAll(FIELD.salesOrder.report, crit).then(function(sos){
+    (sos||[]).forEach(function(r){
+      var no = lv(r[S.orderNo]); if(!no) return;
+      SO_BY_NO[no] = { customer:lv(r[S.customer]), salesman:lv(r[S.salesman]), date:lv(r[S.orderDate]), ordered:num(r[S.orderedQty]) };
+    });
+    if(_rerender) _rerender();
+  }).catch(function(e){ console.error("[dismissed SO by number]", e); });
+}
+
 function transformAndRender(D){
   var F = FIELD, S = F.salesOrder.fields;
 
@@ -951,21 +972,26 @@ function transformAndRender(D){
       var a = ALLOC_BY_MR[mrNo], si = mrToSo[mrNo] || {};
       var poHit = PO_BY_MR[mrNo], trHit = TRANSIT_BY_MR[mrNo], rcvHit = RECEIVE_BY_MR[mrNo], billHit = BILL_BY_MR[mrNo];
       var q = a.reqQty;
+      var det = SO_BY_NO[si.so] || {};          // dismissed SO details fetched by number
+      var disQty = det.ordered || q;
       return {
         id:i+1, name:STATE.itemName, code:STATE.itemCode,
-        branch: si.branch || "—", customer:"", salesman:"—", vendor:"—",
-        // Sales Order line is missing because it was dismissed -> show its qty as
-        // Dismissed and use the MR/allocation date for the SO date.
-        so:[ si.so||"", si.date||"" ], mr:[ mrNo, si.date||"" ],
+        branch: si.branch || "—", customer: det.customer || "", salesman: det.salesman || "—", vendor:"—",
+        // Sales Order line was dismissed -> show its qty as Dismissed; customer/
+        // salesman/date come from the dismissed SO (fetched by number).
+        so:[ si.so||"", det.date || si.date || "" ], mr:[ mrNo, si.date||"" ],
         po: poHit ? [poHit.poNo, poHit.poDate] : ["",""],
         transit: (trHit&&trHit.no) ? [trHit.no, trHit.date, "received"] : ["","",""],
         grn: rcvHit ? [rcvHit.no, rcvHit.date] : ["",""],
         bill: billHit ? [billHit.no, billHit.date] : ["",""],
-        ordered:q, dismissed:q, rate:0, unit:"box", poGroup: poHit?poHit.poNo:null,
+        ordered:disQty, dismissed:disQty, rate:0, unit:"box", poGroup: poHit?poHit.poNo:null,
+        _hasTransit: !!(trHit&&trHit.no), _hasReceive: !!rcvHit, _hasBill: !!billHit,
         mrQty:a.reqQty, poQty:q, transitQty: trHit?q:"", grnQty: rcvHit?q:"", billQty: billHit?q:0,
         invoices:[]
       };
     });
+    // Recover customer/salesman/date for the dismissed SOs (async -> re-renders).
+    fetchDismissedSO(rows.map(function(x){ return x.so && x.so[0]; }));
   }
 
   // Quantity allocation: split each PO's total item quantity across its MR rows,
