@@ -209,7 +209,7 @@
 "use strict";
 
 /* Build marker — bump on each deploy so we can confirm the loaded version. */
-var BUILD = "2026-09-28-c";
+var BUILD = "2026-09-28-d";
 
 /* =========================================================================
    1) CONFIGURATION  — edit ONLY this block once you confirm link names.
@@ -952,14 +952,12 @@ function transformAndRender(D){
       rate: num(r["RATE"]),
       unit: lv(r[S.unit]) || "box",
       poGroup: poNo || null,
-      // MR requested qty = allocation REQ_QTY when allocated, else the SO line qty.
+      // MR requested qty = allocation REQ_QTY when known, else the SO line qty.
+      // PO/Transit/Receive/Bill quantities are the fill-bigger-first split of the
+      // PO total by this request size, computed below.
       mrQty: alloc ? alloc.reqQty : ordered,
-      // Actual per-MR allocated qty flows to PO/Transit/Receive/Bill. When there is
-      // no allocation yet, poQty is filled by the PO split below.
-      _alloc: !!alloc,
-      poQty: alloc ? alloc.qty : 0,
       _hasTransit: !!(trHit && trHit.no), _hasReceive: !!rcvHit, _hasBill: !!billHit,
-      transitQty: "", grnQty: "", billQty: 0,
+      poQty: 0, transitQty: "", grnQty: "", billQty: 0,
       invoices: rowInv
     };
   });
@@ -990,9 +988,8 @@ function transformAndRender(D){
         grn: rcvHit ? [rcvHit.no, rcvHit.date] : ["",""],
         bill: billHit ? [billHit.no, billHit.date] : ["",""],
         ordered:disQty, dismissed:disQty, rate:0, unit:"box", poGroup: poHit?poHit.poNo:null,
-        _alloc:true,
         _hasTransit: !!(trHit&&trHit.no), _hasReceive: !!rcvHit, _hasBill: !!billHit,
-        mrQty:a.reqQty, poQty:q, transitQty: trHit?q:"", grnQty: rcvHit?q:"", billQty: billHit?q:0,
+        mrQty:a.reqQty, poQty:0, transitQty:"", grnQty:"", billQty:0,
         invoices:[]
       };
     });
@@ -1012,18 +1009,16 @@ function transformAndRender(D){
   var byPo = {};
   rows.forEach(function(row){ if(row.poGroup){ (byPo[row.poGroup]=byPo[row.poGroup]||[]).push(row); } });
   Object.keys(byPo).forEach(function(pn){
-    if(poTotal[pn]==null) return;                              // no PO -> no allocation
-    var grp = byPo[pn];
-    // Rows with a real allocation keep their actual qty; split only the remaining
-    // PO quantity across the not-yet-allocated rows, largest request first.
-    var used = grp.reduce(function(a,r){ return a + (r._alloc ? num(r.poQty) : 0); }, 0);
-    var remaining = poTotal[pn] - used;
-    grp.filter(function(r){ return !r._alloc; })
-       .sort(function(a,b){ return num(b.mrQty) - num(a.mrQty); })
-       .forEach(function(row){
-         var give = Math.max(0, Math.min(num(row.mrQty), remaining));
-         row.poQty = give; remaining -= give;
-       });
+    var grp = byPo[pn].slice().sort(function(a,b){ return num(b.mrQty) - num(a.mrQty); }); // bigger request first
+    // Total to distribute = the PO's item qty; if that report didn't return the PO,
+    // assume it covers every request in full (sum of the requests).
+    var total = poTotal[pn];
+    if(total==null) total = grp.reduce(function(a,r){ return a+num(r.mrQty); }, 0);
+    var remaining = total;
+    grp.forEach(function(row){
+      var give = Math.max(0, Math.min(num(row.mrQty), remaining));
+      row.poQty = give; remaining -= give;
+    });
   });
   // Propagate the allocated quantity to the downstream stages this MR reached.
   rows.forEach(function(row){
