@@ -209,7 +209,7 @@
 "use strict";
 
 /* Build marker — bump on each deploy so we can confirm the loaded version. */
-var BUILD = "2026-09-28-a";
+var BUILD = "2026-09-28-b";
 
 /* =========================================================================
    1) CONFIGURATION  — edit ONLY this block once you confirm link names.
@@ -971,9 +971,9 @@ function transformAndRender(D){
     rows = Object.keys(ALLOC_BY_MR).map(function(mrNo, i){
       var a = ALLOC_BY_MR[mrNo], si = mrToSo[mrNo] || {};
       var poHit = PO_BY_MR[mrNo], trHit = TRANSIT_BY_MR[mrNo], rcvHit = RECEIVE_BY_MR[mrNo], billHit = BILL_BY_MR[mrNo];
-      var q = a.reqQty;
-      var det = SO_BY_NO[si.so] || {};          // dismissed SO details fetched by number
-      var disQty = det.ordered || q;
+      var q = a.reqQty;                          // per-item allocated qty (reliable)
+      var det = SO_BY_NO[si.so] || {};           // dismissed SO details fetched by number
+      var disQty = q;                            // dismissed qty = this item's allocated qty
       return {
         id:i+1, name:STATE.itemName, code:STATE.itemCode,
         branch: si.branch || "—", customer: det.customer || "", salesman: det.salesman || "—", vendor:"—",
