@@ -209,7 +209,7 @@
 "use strict";
 
 /* Build marker — bump on each deploy so we can confirm the loaded version. */
-var BUILD = "2026-09-28-i";
+var BUILD = "2026-09-28-j";
 
 /* =========================================================================
    1) CONFIGURATION  — edit ONLY this block once you confirm link names.
@@ -388,6 +388,14 @@ function money(n){ return "₹"+(Number(n)||0).toLocaleString('en-IN'); }
 // Record ID referenced by a lookup field value ({ID, zc_display_value} | "").
 function lookupId(v){ return (v && typeof v==="object") ? (v.ID || v.id || "") : (typeof v==="string" && /^\d{10,}$/.test(v) ? v : ""); }
 function uniq(a){ return a.filter(function(x,i){ return x && a.indexOf(x)===i; }); }
+// Append a stage document to a per-MR list, one entry per document number
+// (accumulating qty if the same document recurs).
+function pushDoc(map, mr, no, date, qty){
+  if(!no) return;
+  var list = map[mr] = map[mr] || [];
+  for(var i=0;i<list.length;i++){ if(list[i].no===no){ list[i].qty += (qty||0); return; } }
+  list.push({ no:no, date:date||"", qty:(qty||0) });
+}
 
 // Pull an "SO/1234" number out of any value shape (string, lookup object, or a
 // multi-lookup array of lookup objects). Returns "" if none found.
@@ -803,12 +811,13 @@ function loadItem(code){
                   var e = ALLOC_BY_MR[mr] || { qty:0, reqQty:0, _seen:{} };
                   if(!e._seen[info.soKey]){ e.qty += info.qty; e.reqQty += info.reqQty; e._seen[info.soKey] = true; }
                   ALLOC_BY_MR[mr] = e;
-                  if(tId && TRANSIT_HDR[tId] && !TRANSIT_BY_MR[mr]) TRANSIT_BY_MR[mr] = { no:TRANSIT_HDR[tId].no, date:TRANSIT_HDR[tId].date };
+                  // One MR can span several transits/receives/bills — collect a LIST
+                  // per MR, one entry per document, with that allocation's qty.
+                  if(tId && TRANSIT_HDR[tId]) pushDoc(TRANSIT_BY_MR, mr, TRANSIT_HDR[tId].no, TRANSIT_HDR[tId].date, info.qty);
                   if(rId){
-                    if(!(rh && /void/i.test(rh.status)) && !RECEIVE_BY_MR[mr]){
-                      RECEIVE_BY_MR[mr] = { no: (rObj.PO_receive_No)||(rh&&rh.no)||"", date: rh?rh.date:"" };
-                    }
-                    if(BILL_BY_RCVID[rId] && !BILL_BY_MR[mr]) BILL_BY_MR[mr] = BILL_BY_RCVID[rId];
+                    if(!(rh && /void/i.test(rh.status))) pushDoc(RECEIVE_BY_MR, mr, (rObj.PO_receive_No)||(rh&&rh.no)||"", rh?rh.date:"", info.qty);
+                    var bh = BILL_BY_RCVID[rId];
+                    if(bh) pushDoc(BILL_BY_MR, mr, bh.no, bh.date, info.qty);
                   }
                 });
               });
@@ -970,10 +979,10 @@ function transformAndRender(D){
     var poHit = mrNo ? PO_BY_MR[mrNo] : null;
     var poNo   = poHit ? poHit.poNo   : fbPoNo;
     var poDate = poHit ? poHit.poDate : fbPoDate;
-    // Stage documents for THIS row's material request (via allocation hub).
-    var trHit   = mrNo ? TRANSIT_BY_MR[mrNo] : null;
-    var rcvHit  = mrNo ? RECEIVE_BY_MR[mrNo] : null;
-    var billHit = mrNo ? BILL_BY_MR[mrNo]    : null;
+    // Stage document LISTS for THIS row's material request (one MR can have many).
+    var trList   = mrNo ? (TRANSIT_BY_MR[mrNo] || []) : [];
+    var rcvList  = mrNo ? (RECEIVE_BY_MR[mrNo] || []) : [];
+    var billList = mrNo ? (BILL_BY_MR[mrNo]    || []) : [];
     // Invoices for THIS sales order (by SO number); unattributed ones on row 0.
     var rowInv = (invBySo[soNo] || []).slice();
     if(i===0) rowInv = rowInv.concat(invNoSo);
@@ -988,20 +997,17 @@ function transformAndRender(D){
       so:[ soNo, lv(r[S.orderDate]) ],
       mr: mrHit ? [mrHit.mr, mrHit.date] : ["",""],
       po: poNo ? [poNo, poDate] : ["",""],
-      transit: (trHit && trHit.no) ? [trHit.no, trHit.date, "received"] : ["","",""],
-      grn: rcvHit ? [rcvHit.no, rcvHit.date] : ["",""],
-      bill: billHit ? [billHit.no, billHit.date] : ["",""],
+      transitList: trList, grnList: rcvList, billList: billList,
       ordered: ordered,
       dismissed: dismissed,
       rate: num(r["RATE"]),
       unit: lv(r[S.unit]) || "box",
       poGroup: poNo || null,
       // MR = requested qty. PO = fill-bigger-first split of the PO total (below).
-      // Transit/Receive/Bill = the actual Zoho allocation QTY (_allocQty).
+      // Transit/Receive/Bill quantities come from their document lists.
       mrQty: alloc ? alloc.reqQty : ordered,
-      _allocQty: alloc ? alloc.qty : null,
-      _hasTransit: !!(trHit && trHit.no), _hasReceive: !!rcvHit, _hasBill: !!billHit,
-      poQty: 0, transitQty: "", grnQty: "", billQty: 0,
+      poQty: 0,
+      billQty: billList.reduce(function(a,x){ return a+num(x.qty); }, 0),
       invoices: rowInv
     };
   });
@@ -1022,7 +1028,8 @@ function transformAndRender(D){
   Object.keys(ALLOC_BY_MR).forEach(function(mrNo){
     if(shownMr[mrNo]) return;
     var a = ALLOC_BY_MR[mrNo], si = mrToSo[mrNo] || {};
-    var poHit = PO_BY_MR[mrNo], trHit = TRANSIT_BY_MR[mrNo], rcvHit = RECEIVE_BY_MR[mrNo], billHit = BILL_BY_MR[mrNo];
+    var poHit = PO_BY_MR[mrNo];
+    var trList = TRANSIT_BY_MR[mrNo]||[], rcvList = RECEIVE_BY_MR[mrNo]||[], billList = BILL_BY_MR[mrNo]||[];
     var det = SO_BY_NO[si.so], found = !!det; det = det || {};
     if(si.so) needSo.push(si.so);
     // Dismissed qty + total from the Dismissed_Sales_Order report (preferred);
@@ -1038,13 +1045,10 @@ function transformAndRender(D){
       vendor:"—",
       so:[ si.so||"", det.date || si.date || "" ], mr:[ mrNo, si.date||"" ],
       po: poHit ? [poHit.poNo, poHit.poDate] : ["",""],
-      transit: (trHit&&trHit.no) ? [trHit.no, trHit.date, "received"] : ["","",""],
-      grn: rcvHit ? [rcvHit.no, rcvHit.date] : ["",""],
-      bill: billHit ? [billHit.no, billHit.date] : ["",""],
+      transitList: trList, grnList: rcvList, billList: billList,
       ordered:soQty, dismissed:dis, rate:0, unit:"box", poGroup: poHit?poHit.poNo:null,
-      _allocQty: (a.qty!=null ? a.qty : a.reqQty),
-      _hasTransit: !!(trHit&&trHit.no), _hasReceive: !!rcvHit, _hasBill: !!billHit,
-      mrQty:a.reqQty, poQty:0, transitQty:"", grnQty:"", billQty:0,
+      mrQty:a.reqQty, poQty:0,
+      billQty: billList.reduce(function(x,y){ return x+num(y.qty); }, 0),
       invoices: (invBySo[si.so] || []).slice()
     });
   });
@@ -1073,15 +1077,6 @@ function transformAndRender(D){
       row.poQty = give; remaining -= give;
     });
   });
-  // Transit / Receive / Bill quantities come from the actual Zoho allocation QTY
-  // (fall back to the PO split only if an allocation qty isn't available). PO keeps
-  // the fill-bigger-first split (row.poQty).
-  rows.forEach(function(row){
-    var q = (row._allocQty != null) ? row._allocQty : row.poQty;
-    row.transitQty = row._hasTransit ? q : "";
-    row.grnQty     = row._hasReceive ? q : "";
-    row.billQty    = row._hasBill    ? q : 0;
-  });
 
   STATE.rows = rows;
 
@@ -1108,9 +1103,9 @@ var retTotal=function(r){return (r.invoices||[]).reduce(function(a,iv){return a+
 
 function stageOf(r){
   if((r.invoices||[]).length) return "Invoiced";
-  if(r.bill[0]) return "Billed";
-  if(r.grn[0]) return "Received";
-  if(r.transit[0]) return r.transit[2]==="received"?"Received":"In Transit";
+  if(r.billList && r.billList.length) return "Billed";
+  if(r.grnList && r.grnList.length) return "Received";
+  if(r.transitList && r.transitList.length) return "In Transit";
   if(r.po[0]) return "PO Raised";
   return "Requested";
 }
@@ -1129,6 +1124,16 @@ function invCells(iv, rs){
 function cnCells(cn){
   if(!cn) return '<td class="dt empty gstart">—</td><td class="no empty">—</td><td class="num"><span class="qy" style="color:#c6d0d9">—</span></td>';
   return '<td class="dt gstart">'+(cn.date||"—")+'</td><td class="no mono">'+cn.no+'</td><td class="num"><span class="qy" style="color:var(--ret)">'+cn.qty+'</span></td>';
+}
+// A stage cell that can hold several documents (transit/receive/bill), each with
+// its own date / number / qty, stacked in the same cell.
+function docListCell(items, rs){
+  var r = rs>1?' rowspan="'+rs+'"':"";
+  if(!items || !items.length) return '<td class="dt empty gstart"'+r+'>—</td><td class="no empty"'+r+'>—</td><td class="num"'+r+'><span class="qy" style="color:#c6d0d9">—</span></td>';
+  var d = items.map(function(x){ return x.date||"—"; }).join('<br>');
+  var n = items.map(function(x){ return x.no; }).join('<br>');
+  var q = items.map(function(x){ return x.qty; }).join('<br>');
+  return '<td class="dt gstart"'+r+'>'+d+'</td><td class="no mono"'+r+'>'+n+'</td><td class="num"'+r+'><span class="qy">'+q+'</span></td>';
 }
 
 function renderLines(list){
@@ -1180,7 +1185,7 @@ function renderLines(list){
           '<td'+RS+'><span class="sm">'+r.salesman+'</span></td>'+
           dnq(r.so,r.ordered,T)+
           '<td class="num vsep"'+RS+'><span class="qy" style="'+(r.dismissed>0?'color:var(--dead);font-weight:700':'color:var(--muted)')+'">'+r.dismissed+'</span></td>'+
-          dnq(r.mr,r.mrQty,T)+dnq(r.po,r.poQty,T)+dnq(r.transit,r.transitQty,T)+dnq(r.grn,r.grnQty,T)+dnq(r.bill,r.billQty,T)+
+          dnq(r.mr,r.mrQty,T)+dnq(r.po,r.poQty,T)+docListCell(r.transitList,T)+docListCell(r.grnList,T)+docListCell(r.billList,T)+
           '<td class="num vsep"'+RS+'><span class="bal '+(bal>0?'open-b':'zero-b')+'">'+bal+'</span></td>';
       }
       if(p.invFirst) tds += invCells(p.iv, p.invRS);
