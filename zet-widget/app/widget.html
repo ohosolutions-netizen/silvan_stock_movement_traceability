@@ -206,7 +206,7 @@
 "use strict";
 
 /* Build marker — bump on each deploy so we can confirm the loaded version. */
-var BUILD = "2026-09-28-n";
+var BUILD = "2026-10-05-a";
 
 /* =========================================================================
    1) CONFIGURATION  — edit ONLY this block once you confirm link names.
@@ -1090,7 +1090,13 @@ function transformAndRender(D){
   var failed = Object.keys(PROG).filter(function(k){ return String(PROG[k]).indexOf("✗")===0; })
                      .map(function(k){ return k+" ("+PROG[k]+")"; });
   if(failed.length){
-    setStatus("err", "Some reports failed to load — usually a wrong report name, wrong item-code field link name, or the item code doesn't exist:<div style='margin-top:6px'>"+failed.join("<br>")+"</div>Open <b>Field discovery</b> below for the real keys.");
+    var permDenied = failed.some(function(f){ return /2898|permission denied|status=403|status=401/i.test(f); });
+    if(permDenied){
+      setStatus("err", "<b>Permission denied</b> — this user's Zoho profile can't view some of the reports this widget reads:<div style='margin-top:6px'>"+failed.join("<br>")+"</div>"+
+        "<div style='margin-top:6px'>Ask the admin to grant this profile <b>view</b> access to every report/form the widget uses (and their lookup forms): Item Master, Sales Order, Material Request, Purchase Order (+header), Material Request Allocations (+subform), Purchase Transit, Purchase Receive, Bill, Sales Invoice, Credit Note, Dismissed Sales Order.</div>");
+    } else {
+      setStatus("err", "Some reports failed to load — usually a wrong report name, wrong item-code field link name, or the item code doesn't exist:<div style='margin-top:6px'>"+failed.join("<br>")+"</div>Add <code>?debug=1</code> to the URL to inspect the fields.");
+    }
   } else if(!rows.length && !invAll.length){
     setStatus("warn", "No request lines for <b>"+STATE.itemCode+"</b> <span style='opacity:.7'>(build "+BUILD+")</span>."+
       "<div style='margin-top:6px;font-size:12px'>Sales Order rows: <b>"+((D.so||[]).length)+"</b> · Item Master: <b>"+((D.itemMaster||[]).length)+"</b> · Invoices: <b>"+invAll.length+"</b> · MRs linked to this item: <b>"+Object.keys(ALLOC_BY_MR).length+"</b></div>"+
