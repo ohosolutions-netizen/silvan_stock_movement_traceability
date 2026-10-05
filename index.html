@@ -206,7 +206,7 @@
 "use strict";
 
 /* Build marker — bump on each deploy so we can confirm the loaded version. */
-var BUILD = "2026-10-05-f";
+var BUILD = "2026-10-05-g";
 
 /* =========================================================================
    1) CONFIGURATION  — edit ONLY this block once you confirm link names.
@@ -545,21 +545,34 @@ var _BUNDLE = { token:-1, promise:null };
 function loadBundle(){
   if(_BUNDLE.token === LOAD_SEQ && _BUNDLE.promise) return _BUNDLE.promise;
   _BUNDLE.token = LOAD_SEQ;
-  // GET + query params (the endpoint is a public-key GET). The single argument
-  // is `itemcode`; the public key authorises the call for every viewer.
-  var cfg = {
-    api_name: CUSTOM_API,
-    http_method: "GET",
-    query_params: { itemcode: STATE.itemCode }
-  };
-  if(CUSTOM_API_PUBLICKEY) cfg.public_key = CUSTOM_API_PUBLICKEY;
-  if(CUSTOM_API_WORKSPACE) cfg.workspace_name = CUSTOM_API_WORKSPACE;
-  _BUNDLE.promise = ZOHO.CREATOR.DATA.invokeCustomApi(cfg).then(function(resp){
-    if(window.__traceDebug) try{ console.log("[bundle raw]", JSON.parse(JSON.stringify(resp))); }catch(_){ console.log("[bundle raw]", resp); }
-    var n = normalizeBundle(resp);
-    if(n.error) console.warn("[bundle] Deluge error:", n.error);
-    return n.sections;
-  });
+  // The single argument is `itemcode`; the public key authorises it for every
+  // viewer. The host frame is picky about HOW the argument is passed (code 1060 /
+  // "Invalid request parameter … [object Object]" means it stringified an object),
+  // so try the likely shapes in order and use whichever actually returns data.
+  var code = STATE.itemCode;
+  var base = { api_name: CUSTOM_API };
+  if(CUSTOM_API_PUBLICKEY) base.public_key = CUSTOM_API_PUBLICKEY;
+  if(CUSTOM_API_WORKSPACE) base.workspace_name = CUSTOM_API_WORKSPACE;
+  function withBase(extra){ var o={}; for(var k in base) o[k]=base[k]; for(var k2 in extra) o[k2]=extra[k2]; return o; }
+  var attempts = [
+    withBase({ http_method:"GET",  query_params:{ itemcode: code } }),
+    withBase({ http_method:"GET",  query_params:"itemcode=" + encodeURIComponent(code) }),
+    withBase({ http_method:"POST", content_type:"application/json", payload:{ itemcode: code } })
+  ];
+  function tryAttempt(i){
+    if(i >= attempts.length) return Promise.reject({ message:"all invokeCustomApi parameter shapes failed (see console)" });
+    if(window.__traceDebug) console.log("[bundle attempt "+(i+1)+"/"+attempts.length+"]", attempts[i]);
+    return ZOHO.CREATOR.DATA.invokeCustomApi(attempts[i]).then(function(resp){
+      if(window.__traceDebug) try{ console.log("[bundle raw "+(i+1)+"]", JSON.parse(JSON.stringify(resp))); }catch(_){ console.log("[bundle raw "+(i+1)+"]", resp); }
+      var n = normalizeBundle(resp);
+      if(Object.keys(n.sections).length){ if(n.error) console.warn("[bundle] Deluge error:", n.error); return n.sections; }
+      return Promise.reject({ message:"resolved but no report sections found", resp:resp });
+    }).catch(function(e){
+      if(window.__traceDebug) console.warn("[bundle attempt "+(i+1)+" failed]", errToStr(e));
+      return tryAttempt(i+1);
+    });
+  }
+  _BUNDLE.promise = tryAttempt(0);
   return _BUNDLE.promise;
 }
 
