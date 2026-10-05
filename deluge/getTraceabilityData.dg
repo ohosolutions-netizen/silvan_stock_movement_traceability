@@ -216,13 +216,12 @@ string for_traceability_report_fetch_data(string itemcode)
 					if(transitSeen.get(tid) == null)
 					{
 						transitSeen.put(tid,"1");
-						t = a.Purchase_Transist;
 						tr = Map();
 						tr.put("ID", a.Purchase_Transist.ID);
-						tr.put("Order_No", t.Order_No);
-						if(t.Delivery_Date != null)
+						tr.put("Order_No", a.Purchase_Transist.Order_No);
+						if(a.Purchase_Transist.Delivery_Date != null)
 						{
-							tr.put("Delivery_Date", t.Delivery_Date.toString("dd-MMM-yyyy"));
+							tr.put("Delivery_Date", a.Purchase_Transist.Delivery_Date.toString("dd-MMM-yyyy"));
 						}
 						else
 						{
@@ -237,14 +236,13 @@ string for_traceability_report_fetch_data(string itemcode)
 					if(receiveSeen.get(rid) == null)
 					{
 						receiveSeen.put(rid,"1");
-						rc = a.Purchase_Receives;
 						rr = Map();
 						rr.put("ID", a.Purchase_Receives.ID);
-						rr.put("PO_receive_No", rc.PO_receive_No);
-						rr.put("POR_Status", rc.POR_Status);
-						if(rc.Purchase_Receives_Date != null)
+						rr.put("PO_receive_No", a.Purchase_Receives.PO_receive_No);
+						rr.put("POR_Status", a.Purchase_Receives.POR_Status);
+						if(a.Purchase_Receives.Purchase_Receives_Date != null)
 						{
-							rr.put("Purchase_Receives_Date", rc.Purchase_Receives_Date.toString("dd-MMM-yyyy"));
+							rr.put("Purchase_Receives_Date", a.Purchase_Receives.Purchase_Receives_Date.toString("dd-MMM-yyyy"));
 						}
 						else
 						{
@@ -255,19 +253,18 @@ string for_traceability_report_fetch_data(string itemcode)
 				}
 				if(a.Bill != null && a.Purchase_Receives != null)
 				{
-					b = a.Bill;
 					bstat = "";
-					if(b.STATUS != null)
+					if(a.Bill.STATUS != null)
 					{
-						bstat = b.STATUS;
+						bstat = a.Bill.STATUS;
 					}
 					if(bstat != "Void" && bstat != "Deleted")
 					{
 						bm = Map();
-						bm.put("Bill_No", b.Bill_No);
-						if(b.BilDate != null)
+						bm.put("Bill_No", a.Bill.Bill_No);
+						if(a.Bill.BilDate != null)
 						{
-							bm.put("BilDate", b.BilDate.toString("dd-MMM-yyyy"));
+							bm.put("BilDate", a.Bill.BilDate.toString("dd-MMM-yyyy"));
 						}
 						else
 						{
@@ -380,7 +377,7 @@ string for_traceability_report_fetch_data(string itemcode)
 				{
 					if(mrr.Destination_Branch != null)
 					{
-						dB = mrr.Destination_Branch.Name;
+						dB = mrr.Destination_Branch.Branch;
 					}
 				}
 				catch (e6)
@@ -391,7 +388,7 @@ string for_traceability_report_fetch_data(string itemcode)
 				{
 					if(mrr.Source_Branch != null)
 					{
-						sB = mrr.Source_Branch.Name;
+						sB = mrr.Source_Branch.Branch;
 					}
 				}
 				catch (e7)
