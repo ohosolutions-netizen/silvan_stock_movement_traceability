@@ -150,6 +150,7 @@
       </div>
     </div>
     <div class="head-actions">
+      <button class="btn" id="btn-debug" title="Show field discovery / raw data">🔧 Debug</button>
       <button class="btn" id="btn-refresh"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6"/></svg>Refresh</button>
     </div>
   </div>
@@ -206,7 +207,7 @@
 "use strict";
 
 /* Build marker — bump on each deploy so we can confirm the loaded version. */
-var BUILD = "2026-10-05-g";
+var BUILD = "2026-10-05-h";
 
 /* =========================================================================
    1) CONFIGURATION  — edit ONLY this block once you confirm link names.
@@ -1451,6 +1452,12 @@ function boot(){
     });
   });
   $('btn-refresh').addEventListener('click',function(){ if(STATE.itemCode) loadItem(STATE.itemCode); });
+  // Debug button: reveal the field-discovery panel on demand (no ?debug=1 needed).
+  $('btn-debug').addEventListener('click',function(){
+    window.__traceDebug = true;
+    var dbg=$('debug'); if(dbg){ dbg.hidden=false; dbg.open=true; dbg.scrollIntoView({behavior:'smooth'}); }
+    renderDebug();
+  });
   $('test-go').addEventListener('click',function(){ var c=$('test-code').value.trim(); if(c) loadItem(c); });
   $('test-code').addEventListener('keydown',function(e){ if(e.key==="Enter"){ var c=e.target.value.trim(); if(c) loadItem(c);} });
 
