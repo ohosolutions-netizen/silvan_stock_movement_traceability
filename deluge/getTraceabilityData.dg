@@ -1,30 +1,3 @@
-/* ============================================================================
-   CUSTOM API : for_traceability_report_fetch_data(string itemcode)
-   ----------------------------------------------------------------------------
-   One call per item. Reads everything the widget needs with native Deluge fetch
-   (runs as the app OWNER -> no per-user permission error, no OAuth connection),
-   item-scoped so the heavy tables stay small, and returns a single map keyed by
-   the report link names the widget already uses:
-
-     response = { "code":3000, "data": {
-        "API_ITEM_MASTER":[...], "SALES_ORDERS_ITEMWISE":[...],
-        "Dismissed_Sales_Order":[...], "PURCHASE_ORDERS_ITEMWISE":[...],
-        "Purchase_Order_Report":[...], "Material_Request_Report":[...],
-        "All_Material_Request_Allocations":[...],
-        "MATERIAL_REQUEST_ALLOCATION_SUBFORM_Report":[...],
-        "API_PURCHASE_TRANSIT":[...], "API_PURCHASE_RECEIVE":[...],
-        "API_of_BILLS":[...], "API_SALES_INVOICES":[...], "API_CREDIT_NOTES":[...]
-     }}
-
-   DEPLOY: Microservices -> Custom API -> name for_traceability_report_fetch_data,
-   Method GET or POST, Response JSON, User scope All users, one argument:
-       itemcode  (String, mandatory)
-   Set CUSTOM_API = "for_traceability_report_fetch_data" in index.html.
-
-   VERIFY: lookup display names use Customer.Name / Employee.Name / Branch.Name —
-   adjust ".Name" if a form's name field differs. Dates are "dd-MMM-yyyy".
-   ============================================================================ */
-
 string for_traceability_report_fetch_data(string itemcode)
 {
 	response = Map();
@@ -34,12 +7,11 @@ string for_traceability_report_fetch_data(string itemcode)
 	{
 		code = itemcode.trim();
 	}
-	itemSoNos = Map();   /* SO numbers that belong to this item */
-	itemMrNos = Map();   /* MR numbers that belong to this item (from allocations) */
-	poIds = Map();       /* PO record ids referenced by this item's PO lines */
+	itemSoNos = Map();
+	itemMrNos = Map();
+	poIds = Map();
 	try
 	{
-		/* ---------- ITEM MASTER ---------- */
 		imList = List();
 		itemId = null;
 		ims = Item_Master[Item_Code == code];
@@ -57,8 +29,6 @@ string for_traceability_report_fetch_data(string itemcode)
 			}
 		}
 		data.put("API_ITEM_MASTER", imList);
-
-		/* ---------- SALES ORDERS ITEMWISE  (+ DISMISSED) ---------- */
 		soList = List();
 		disList = List();
 		sos = Sales_Order_Subform[ITEM_CODE == code];
@@ -74,14 +44,23 @@ string for_traceability_report_fetch_data(string itemcode)
 				if(so != null)
 				{
 					soNo = so.Order_No;
-					if(so.Date_field != null) { soDate = so.Date_field.toString("dd-MMM-yyyy"); }
-					if(so.Customer != null) { custName = so.Customer.Name; }
-					if(so.Sales_Man != null) { smName = so.Sales_Man.Name; }
+					if(so.Date_field != null)
+					{
+						soDate = so.Date_field.toString("dd-MMM-yyyy");
+					}
+					if(so.Customer != null)
+					{
+						custName = so.Customer.Name;
+					}
+					if(so.Sales_Man != null)
+					{
+						smName = so.Sales_Man.Name;
+					}
 				}
 			}
 			if(soNo != "")
 			{
-				itemSoNos.put(soNo, "1");
+				itemSoNos.put(soNo,"1");
 			}
 			m = Map();
 			m.put("ID", r.ID);
@@ -92,7 +71,14 @@ string for_traceability_report_fetch_data(string itemcode)
 			m.put("Dismissed_Qty", r.Dismissed_Qty);
 			nm = Map();
 			nm.put("Item_Code", r.ITEM_CODE);
-			try { nm.put("zc_display_value", r.ITEM_NAME.Item_Name); } catch (e1) { nm.put("zc_display_value", ""); }
+			try
+			{
+				nm.put("zc_display_value", r.ITEM_NAME.Item_Name);
+			}
+			catch (e1)
+			{
+				nm.put("zc_display_value", "");
+			}
 			m.put("ITEM_NAME", nm);
 			m.put("Lookup.Order_No", soNo);
 			m.put("Lookup.Date_field", soDate);
@@ -102,7 +88,6 @@ string for_traceability_report_fetch_data(string itemcode)
 			m.put("Lookup.Customer", cm);
 			m.put("Lookup.Sales_Man", smName);
 			soList.add(m);
-			/* dismissed row (same data, only when a qty was dismissed) */
 			if(r.Dismissed_Qty != null && r.Dismissed_Qty > 0)
 			{
 				dm = Map();
@@ -123,8 +108,6 @@ string for_traceability_report_fetch_data(string itemcode)
 		}
 		data.put("SALES_ORDERS_ITEMWISE", soList);
 		data.put("Dismissed_Sales_Order", disList);
-
-		/* ---------- PURCHASE ORDERS ITEMWISE ---------- */
 		poList = List();
 		pos = Purchase_Order_Subform[ITEMCODE == code];
 		for each r in pos
@@ -135,9 +118,13 @@ string for_traceability_report_fetch_data(string itemcode)
 			if(r.Purchase_Order != null)
 			{
 				poNo = r.Purchase_Order.Order_No;
-				if(r.Purchase_Order.Date_field != null) { poDate = r.Purchase_Order.Date_field.toString("dd-MMM-yyyy"); }
+				if(r.Purchase_Order.Date_field != null)
+				{
+					poDate = r.Purchase_Order.Date_field.toString("dd-MMM-yyyy");
+				}
 				poStatus = r.Purchase_Order.PO_Status;
-				poIds.put(r.Purchase_Order.ID.toString(), "1");
+				poKey = r.Purchase_Order.ID.toString();
+				poIds.put(poKey,"1");
 			}
 			if(poStatus != "Void")
 			{
@@ -150,8 +137,6 @@ string for_traceability_report_fetch_data(string itemcode)
 			}
 		}
 		data.put("PURCHASE_ORDERS_ITEMWISE", poList);
-
-		/* ---------- ALLOCATIONS (item-scoped) + QTY SUBFORM + TRANSIT + RECEIVE + BILL ---------- */
 		allocList = List();
 		allocQtyList = List();
 		transitList = List();
@@ -179,11 +164,17 @@ string for_traceability_report_fetch_data(string itemcode)
 				{
 					rm = Map();
 					rm.put("ID", a.Purchase_Receives.ID);
-					try { rm.put("PO_receive_No", a.Purchase_Receives.PO_receive_No); } catch (e1) { }
+					try
+					{
+						rm.put("PO_receive_No", a.Purchase_Receives.PO_receive_No);
+					}
+					catch (e2)
+					{
+						rm.put("PO_receive_No", "");
+					}
 					am.put("Purchase_Receives", rm);
 				}
 				allocList.add(am);
-				/* allocation qty — from the inline LINE_ITEM subform */
 				for each li in a.LINE_ITEM
 				{
 					q = Map();
@@ -192,7 +183,17 @@ string for_traceability_report_fetch_data(string itemcode)
 					q.put("MATERIAL_REQUEST_ALLOCATION", aa);
 					mm = Map();
 					mrNo = "";
-					try { if(li.Material_Request != null) { mrNo = li.Material_Request.Request_No; } } catch (e2) { }
+					try
+					{
+						if(li.Material_Request != null)
+						{
+							mrNo = li.Material_Request.Request_No;
+						}
+					}
+					catch (e3)
+					{
+						mrNo = "";
+					}
 					mm.put("Request_No", mrNo);
 					q.put("Material_Request", mm);
 					q.put("QTY", li.QTY);
@@ -206,51 +207,72 @@ string for_traceability_report_fetch_data(string itemcode)
 					allocQtyList.add(q);
 					if(mrNo != "")
 					{
-						itemMrNos.put(mrNo, "1");
+						itemMrNos.put(mrNo,"1");
 					}
 				}
-				/* transit header (dedup) */
 				if(a.Purchase_Transist != null)
 				{
 					tid = a.Purchase_Transist.ID.toString();
 					if(transitSeen.get(tid) == null)
 					{
-						transitSeen.put(tid, "1");
+						transitSeen.put(tid,"1");
 						t = a.Purchase_Transist;
 						tr = Map();
 						tr.put("ID", a.Purchase_Transist.ID);
 						tr.put("Order_No", t.Order_No);
-						if(t.Delivery_Date != null) { tr.put("Delivery_Date", t.Delivery_Date.toString("dd-MMM-yyyy")); } else { tr.put("Delivery_Date", ""); }
+						if(t.Delivery_Date != null)
+						{
+							tr.put("Delivery_Date", t.Delivery_Date.toString("dd-MMM-yyyy"));
+						}
+						else
+						{
+							tr.put("Delivery_Date", "");
+						}
 						transitList.add(tr);
 					}
 				}
-				/* receive header (dedup) */
 				if(a.Purchase_Receives != null)
 				{
 					rid = a.Purchase_Receives.ID.toString();
 					if(receiveSeen.get(rid) == null)
 					{
-						receiveSeen.put(rid, "1");
+						receiveSeen.put(rid,"1");
 						rc = a.Purchase_Receives;
 						rr = Map();
 						rr.put("ID", a.Purchase_Receives.ID);
 						rr.put("PO_receive_No", rc.PO_receive_No);
 						rr.put("POR_Status", rc.POR_Status);
-						if(rc.Purchase_Receives_Date != null) { rr.put("Purchase_Receives_Date", rc.Purchase_Receives_Date.toString("dd-MMM-yyyy")); } else { rr.put("Purchase_Receives_Date", ""); }
+						if(rc.Purchase_Receives_Date != null)
+						{
+							rr.put("Purchase_Receives_Date", rc.Purchase_Receives_Date.toString("dd-MMM-yyyy"));
+						}
+						else
+						{
+							rr.put("Purchase_Receives_Date", "");
+						}
 						receiveList.add(rr);
 					}
 				}
-				/* bill header — via the allocation's Bill link, mapped to its receive id */
 				if(a.Bill != null && a.Purchase_Receives != null)
 				{
 					b = a.Bill;
 					bstat = "";
-					if(b.STATUS != null) { bstat = b.STATUS; }
+					if(b.STATUS != null)
+					{
+						bstat = b.STATUS;
+					}
 					if(bstat != "Void" && bstat != "Deleted")
 					{
 						bm = Map();
 						bm.put("Bill_No", b.Bill_No);
-						if(b.BilDate != null) { bm.put("BilDate", b.BilDate.toString("dd-MMM-yyyy")); } else { bm.put("BilDate", ""); }
+						if(b.BilDate != null)
+						{
+							bm.put("BilDate", b.BilDate.toString("dd-MMM-yyyy"));
+						}
+						else
+						{
+							bm.put("BilDate", "");
+						}
 						bm.put("STATUS", bstat);
 						prl = List();
 						one = Map();
@@ -267,17 +289,24 @@ string for_traceability_report_fetch_data(string itemcode)
 		data.put("API_PURCHASE_TRANSIT", transitList);
 		data.put("API_PURCHASE_RECEIVE", receiveList);
 		data.put("API_of_BILLS", billList);
-
-		/* ---------- PURCHASE ORDER HEADER (only the item's POs) ---------- */
 		poHdrList = List();
-		for each pid in poIds.keys()
+		poKeyList = poIds.keys();
+		for each pk in poKeyList
 		{
-			ph = Purchase_Order[ID == pid.toLong()];
+			pidL = pk.toLong();
+			ph = Purchase_Order[ID == pidL];
 			if(ph != null)
 			{
 				m = Map();
 				m.put("Order_No", ph.Order_No);
-				if(ph.Date_field != null) { m.put("Date_field", ph.Date_field.toString("dd-MMM-yyyy")); } else { m.put("Date_field", ""); }
+				if(ph.Date_field != null)
+				{
+					m.put("Date_field", ph.Date_field.toString("dd-MMM-yyyy"));
+				}
+				else
+				{
+					m.put("Date_field", "");
+				}
 				m.put("PO_Status", ph.PO_Status);
 				mrs = List();
 				if(ph.Material_Request != null)
@@ -285,7 +314,14 @@ string for_traceability_report_fetch_data(string itemcode)
 					for each mrRec in ph.Material_Request
 					{
 						one = Map();
-						try { one.put("Request_No", mrRec.Request_No); } catch (e1) { }
+						try
+						{
+							one.put("Request_No", mrRec.Request_No);
+						}
+						catch (e4)
+						{
+							one.put("Request_No", "");
+						}
 						mrs.add(one);
 					}
 				}
@@ -294,8 +330,6 @@ string for_traceability_report_fetch_data(string itemcode)
 			}
 		}
 		data.put("Purchase_Order_Report", poHdrList);
-
-		/* ---------- MATERIAL REQUEST (only those tied to this item's SOs / MRs) ---------- */
 		mrList = List();
 		mrecs = Material_Request[ID != 0];
 		for each r in mrecs
@@ -307,7 +341,14 @@ string for_traceability_report_fetch_data(string itemcode)
 				for each soRec in r.Sales_Order_no
 				{
 					ono = "";
-					try { ono = soRec.Order_No; } catch (e1) { }
+					try
+					{
+						ono = soRec.Order_No;
+					}
+					catch (e5)
+					{
+						ono = "";
+					}
 					one = Map();
 					one.put("Order_No", ono);
 					refs.add(one);
@@ -325,11 +366,38 @@ string for_traceability_report_fetch_data(string itemcode)
 			{
 				m = Map();
 				m.put("Request_No", r.Request_No);
-				if(r.Date_field != null) { m.put("Date_field", r.Date_field.toString("dd-MMM-yyyy")); } else { m.put("Date_field", ""); }
+				if(r.Date_field != null)
+				{
+					m.put("Date_field", r.Date_field.toString("dd-MMM-yyyy"));
+				}
+				else
+				{
+					m.put("Date_field", "");
+				}
 				dB = "";
 				sB = "";
-				try { if(r.Destination_Branch != null) { dB = r.Destination_Branch.Name; } } catch (e2) { }
-				try { if(r.Source_Branch != null) { sB = r.Source_Branch.Name; } } catch (e3) { }
+				try
+				{
+					if(r.Destination_Branch != null)
+					{
+						dB = r.Destination_Branch.Name;
+					}
+				}
+				catch (e6)
+				{
+					dB = "";
+				}
+				try
+				{
+					if(r.Source_Branch != null)
+					{
+						sB = r.Source_Branch.Name;
+					}
+				}
+				catch (e7)
+				{
+					sB = "";
+				}
 				m.put("Destination_Branch", dB);
 				m.put("Source_Branch", sB);
 				m.put("Sales_Order_no", refs);
@@ -337,8 +405,6 @@ string for_traceability_report_fetch_data(string itemcode)
 			}
 		}
 		data.put("Material_Request_Report", mrList);
-
-		/* ---------- SALES INVOICES (item line items -> parent invoice) ---------- */
 		invMap = Map();
 		invLines = Sales_Invoice_Line_Items[ITEM_CODE == code];
 		for each li in invLines
@@ -349,17 +415,44 @@ string for_traceability_report_fetch_data(string itemcode)
 				em = invMap.get(invId);
 				if(em == null)
 				{
-					inv = Sales_Invoice[ID == li.Sales_Invoice.ID];
 					em = Map();
+					inv = Sales_Invoice[ID == li.Sales_Invoice.ID];
 					if(inv != null)
 					{
 						em.put("Sales_Invoice_No", inv.Invoice_No);
-						if(inv.Invoice_Date != null) { em.put("Sales_Invoice_Date", inv.Invoice_Date.toString("dd-MMM-yyyy")); } else { em.put("Sales_Invoice_Date", ""); }
+						if(inv.Invoice_Date != null)
+						{
+							em.put("Sales_Invoice_Date", inv.Invoice_Date.toString("dd-MMM-yyyy"));
+						}
+						else
+						{
+							em.put("Sales_Invoice_Date", "");
+						}
 						sono = "";
-						try { if(inv.Sales_Order_NO != null) { sono = inv.Sales_Order_NO.Order_No; } } catch (e1) { }
+						try
+						{
+							if(inv.Sales_Order_NO != null)
+							{
+								sono = inv.Sales_Order_NO.Order_No;
+							}
+						}
+						catch (e8)
+						{
+							sono = "";
+						}
 						em.put("Sales_Order_no", sono);
 						icn = "";
-						try { if(inv.Customer != null) { icn = inv.Customer.Name; } } catch (e2) { }
+						try
+						{
+							if(inv.Customer != null)
+							{
+								icn = inv.Customer.Name;
+							}
+						}
+						catch (e9)
+						{
+							icn = "";
+						}
 						em.put("Customer", icn);
 					}
 					em.put("Status", "");
@@ -369,17 +462,17 @@ string for_traceability_report_fetch_data(string itemcode)
 				lim = Map();
 				lim.put("ITEM_CODE", li.ITEM_CODE);
 				lim.put("QTY", li.QTY);
-				em.get("Line_Item").add(lim);
+				liList = em.get("Line_Item");
+				liList.add(lim);
 			}
 		}
 		invList = List();
-		for each k in invMap.keys()
+		invKeys = invMap.keys();
+		for each k in invKeys
 		{
 			invList.add(invMap.get(k));
 		}
 		data.put("API_SALES_INVOICES", invList);
-
-		/* ---------- CREDIT NOTES (item line items -> parent credit note) ---------- */
 		cnMap = Map();
 		cnLines = Credit_Note_Line_Items[ITEM_CODE == code];
 		for each li in cnLines
@@ -390,12 +483,19 @@ string for_traceability_report_fetch_data(string itemcode)
 				em = cnMap.get(cnId);
 				if(em == null)
 				{
-					cnRec = Credit_Note[ID == li.Credit_Note.ID];
 					em = Map();
+					cnRec = Credit_Note[ID == li.Credit_Note.ID];
 					if(cnRec != null)
 					{
 						em.put("Credit_No", cnRec.Credit_No);
-						if(cnRec.Credit_Note_Date != null) { em.put("Credit_Note_Date", cnRec.Credit_Note_Date.toString("dd-MMM-yyyy")); } else { em.put("Credit_Note_Date", ""); }
+						if(cnRec.Credit_Note_Date != null)
+						{
+							em.put("Credit_Note_Date", cnRec.Credit_Note_Date.toString("dd-MMM-yyyy"));
+						}
+						else
+						{
+							em.put("Credit_Note_Date", "");
+						}
 						em.put("Credit_Note_Status", cnRec.Credit_Note_Status);
 					}
 					em.put("Line_Item", List());
@@ -404,16 +504,17 @@ string for_traceability_report_fetch_data(string itemcode)
 				lim = Map();
 				lim.put("ITEM_CODE", li.ITEM_CODE);
 				lim.put("QTY", li.QTY);
-				em.get("Line_Item").add(lim);
+				liList = em.get("Line_Item");
+				liList.add(lim);
 			}
 		}
 		cnList = List();
-		for each k in cnMap.keys()
+		cnKeys = cnMap.keys();
+		for each k in cnKeys
 		{
 			cnList.add(cnMap.get(k));
 		}
 		data.put("API_CREDIT_NOTES", cnList);
-
 		response.put("code", 3000);
 		response.put("data", data);
 	}
