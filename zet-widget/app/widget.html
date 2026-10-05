@@ -206,7 +206,7 @@
 "use strict";
 
 /* Build marker — bump on each deploy so we can confirm the loaded version. */
-var BUILD = "2026-10-05-d";
+var BUILD = "2026-10-05-e";
 
 /* =========================================================================
    1) CONFIGURATION  — edit ONLY this block once you confirm link names.
@@ -232,8 +232,9 @@ var APP_NAME = "silvan-tiles";   // application link name (from the app URL)
      CUSTOM_API           : the Custom API link name (must match the Deluge one)
      CUSTOM_API_WORKSPACE : workspace link name, only if it differs from default
    ------------------------------------------------------------------------- */
-var CUSTOM_API = "for_traceability_report_fetch_data";
-var CUSTOM_API_WORKSPACE = "";   // leave "" to use the default workspace
+var CUSTOM_API = "teaceability_fetch_data";   // the Custom API LINK name (not the function name)
+var CUSTOM_API_WORKSPACE = "";                // leave "" to use the default workspace
+var CUSTOM_API_PUBLICKEY = "FUMHKb3GC3NkvkMrHtNwgqdDw"; // Public Key auth on the Custom API
 
 var FIELD = {
   itemMaster: {
@@ -509,21 +510,32 @@ function normalizeBundle(resp){
   var found = null, err = null;
   function looksLikeBundle(o){
     if(!o || typeof o!=="object" || Array.isArray(o)) return false;
-    // a bundle has at least one of our known report keys as an array
     var keys = ["API_ITEM_MASTER","SALES_ORDERS_ITEMWISE","All_Material_Request_Allocations","Material_Request_Report"];
     return keys.some(function(k){ return Array.isArray(o[k]); });
   }
+  // The Deluge function returns the bundle as a JSON *string* (response.toString()),
+  // which the Custom API may hand back as a string at the top level or nested under
+  // data/result/… — so try to JSON.parse any string we meet while scanning.
+  function coerce(o){
+    if(typeof o!=="string") return o;
+    var s = o.trim();
+    if(s.charAt(0)!=="{" && s.charAt(0)!=="[") return o;
+    try{ return JSON.parse(s); }catch(_){ return o; }
+  }
   function scan(o, depth){
-    if(o==null || depth>6 || found) return;
-    if(typeof o==="object" && o.error && !err) err = o.error;
+    if(o==null || depth>7 || found) return;
+    o = coerce(o);
+    if(o && typeof o==="object" && o.error && !err) err = o.error;
     if(looksLikeBundle(o)){ found = o; return; }
-    if(typeof o==="object"){
-      ["data","result","response","details","output","body","records"].forEach(function(k){
-        if(!found && o[k] && typeof o[k]==="object") scan(o[k], depth+1);
+    if(o && typeof o==="object"){
+      ["data","result","response","details","output","body","records","result_data"].forEach(function(k){
+        if(found) return;
+        var v = coerce(o[k]);
+        if(v && typeof v==="object") scan(v, depth+1);
       });
     }
   }
-  scan(resp||{}, 0);
+  scan(resp, 0);
   return { sections: found || {}, error: err };
 }
 
@@ -533,11 +545,14 @@ var _BUNDLE = { token:-1, promise:null };
 function loadBundle(){
   if(_BUNDLE.token === LOAD_SEQ && _BUNDLE.promise) return _BUNDLE.promise;
   _BUNDLE.token = LOAD_SEQ;
+  // GET + query params (the endpoint is a public-key GET). The single argument
+  // is `itemcode`; the public key authorises the call for every viewer.
   var cfg = {
     api_name: CUSTOM_API,
-    http_method: "POST",
-    payload: { itemcode: STATE.itemCode }
+    http_method: "GET",
+    query_params: { itemcode: STATE.itemCode }
   };
+  if(CUSTOM_API_PUBLICKEY) cfg.public_key = CUSTOM_API_PUBLICKEY;
   if(CUSTOM_API_WORKSPACE) cfg.workspace_name = CUSTOM_API_WORKSPACE;
   _BUNDLE.promise = ZOHO.CREATOR.DATA.invokeCustomApi(cfg).then(function(resp){
     if(window.__traceDebug) try{ console.log("[bundle raw]", JSON.parse(JSON.stringify(resp))); }catch(_){ console.log("[bundle raw]", resp); }
