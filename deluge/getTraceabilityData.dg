@@ -38,9 +38,14 @@ string for_traceability_report_fetch_data(string itemcode)
 			soDate = "";
 			custName = "";
 			smName = "";
-			if(sor.Lookup != null)
+			soLink = sor.Lookup;
+			if(soLink == null)
 			{
-				so = Sales_Order[ID == sor.Lookup.ID];
+				soLink = sor.Sales_Order;
+			}
+			if(soLink != null)
+			{
+				so = Sales_Order[ID == soLink.ID];
 				if(so != null)
 				{
 					soNo = so.Order_No;
