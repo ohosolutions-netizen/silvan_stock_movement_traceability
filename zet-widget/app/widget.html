@@ -206,7 +206,7 @@
 "use strict";
 
 /* Build marker — bump on each deploy so we can confirm the loaded version. */
-var BUILD = "2026-10-05-a";
+var BUILD = "2026-10-05-b";
 
 /* =========================================================================
    1) CONFIGURATION  — edit ONLY this block once you confirm link names.
@@ -218,6 +218,19 @@ var BUILD = "2026-10-05-a";
    the Field-discovery panel at the bottom of the page.
    ========================================================================= */
 var APP_NAME = "silvan-tiles";   // application link name (from the app URL)
+
+/* -------------------------------------------------------------------------
+   Owner-privileged data access.
+   All reads go through a Deluge Custom API (see deluge/getTraceabilityData.dg)
+   that runs as the app OWNER, so the logged-in viewer's own report/form
+   permissions never block a fetch (no more code 2898 / HTTP 403 per user).
+   If the Custom API isn't present (e.g. local preview), the widget falls back
+   to reading directly as the viewer via the normal SDK — so nothing regresses.
+     CUSTOM_API           : the Custom API link name (must match the Deluge one)
+     CUSTOM_API_WORKSPACE : workspace link name, only if it differs from default
+   ------------------------------------------------------------------------- */
+var CUSTOM_API = "getTraceabilityData";
+var CUSTOM_API_WORKSPACE = "";   // leave "" to use the default workspace
 
 var FIELD = {
   itemMaster: {
@@ -480,24 +493,73 @@ function sdkInfo(){
   return {
     present: !!C,
     keys: C ? Object.keys(C) : [],
+    invoke:    !!(C && C.DATA && typeof C.DATA.invokeCustomApi==="function"),
     apiGetAll: !!(C && C.API && typeof C.API.getAllRecords==="function"),
     dataGet:   !!(C && C.DATA && typeof C.DATA.getRecords==="function")
   };
 }
 
+// The records array can be nested differently depending on how the Custom API
+// serialises the Deluge return. Dig it out tolerantly and normalise to {data,code}.
+function normalizeCustomApiResp(resp){
+  var code = null, data = null;
+  function asArr(x){ return Array.isArray(x) ? x : null; }
+  function scan(o, depth){
+    if(o==null || depth>5) return;
+    if(code===null && (o.code!=null) && (typeof o.code==="number"||/^\d+$/.test(o.code))) code = o.code;
+    if(data===null){
+      if(asArr(o.data)) data = o.data;
+      else if(asArr(o.records)) data = o.records;
+      else if(asArr(o.result)) data = o.result;
+    }
+    if(data===null && typeof o==="object"){
+      ["data","result","response","details","output","body"].forEach(function(k){
+        if(data===null && o[k] && typeof o[k]==="object") scan(o[k], depth+1);
+      });
+    }
+  }
+  if(Array.isArray(resp)) return { data:resp, code:3000 };
+  scan(resp||{}, 0);
+  return { data: data||[], code: code };
+}
+
 function callGetRecords(reportName, criteria, page){
   var C = ZOHO.CREATOR, info = sdkInfo();
+
+  // PREFERRED: read through the owner-privileged Deluge Custom API so the
+  // viewer's own permissions never block the fetch. The legacy getRecords the
+  // Custom API wraps pages by from_index (1-based) + limit, so translate page.
+  if(info.invoke && CUSTOM_API){
+    var fromIdx = (page-1)*PAGE_SIZE + 1;
+    var cfg = {
+      api_name: CUSTOM_API,
+      http_method: "POST",
+      payload: { report: reportName, criteria: criteria || "", from_index: fromIdx, limit: PAGE_SIZE }
+    };
+    if(CUSTOM_API_WORKSPACE) cfg.workspace_name = CUSTOM_API_WORKSPACE;
+    return C.DATA.invokeCustomApi(cfg).then(function(resp){
+      if(window.__traceDebug) try{ console.log("[invokeCustomApi raw]", reportName, JSON.parse(JSON.stringify(resp))); }catch(_){ console.log("[invokeCustomApi raw]", reportName, resp); }
+      var norm = normalizeCustomApiResp(resp);
+      // Deluge surfaces a read error as an `error` field (data stays empty).
+      var errTxt = (resp && (resp.error || (resp.data && resp.data.error))) || "";
+      if(errTxt && !norm.data.length){ return Promise.reject({ message:String(errTxt), code:norm.code }); }
+      return { data: norm.data };
+    });
+  }
+
+  // FALLBACK (local preview / Custom API not deployed yet): read directly as the
+  // viewer. Subject to the viewer's permissions, but keeps the widget working.
   if(info.apiGetAll){
-    var cfg = { appName: APP_NAME, reportName: reportName, page: page, pageSize: PAGE_SIZE };
-    if(criteria) cfg.criteria = criteria;
-    return C.API.getAllRecords(cfg);
+    var c1 = { appName: APP_NAME, reportName: reportName, page: page, pageSize: PAGE_SIZE };
+    if(criteria) c1.criteria = criteria;
+    return C.API.getAllRecords(c1);
   }
   if(info.dataGet){
-    var cfg2 = { app_name: APP_NAME, report_name: reportName, page: page, max_records: PAGE_SIZE };
-    if(criteria) cfg2.criteria = criteria;
-    return C.DATA.getRecords(cfg2);
+    var c2 = { app_name: APP_NAME, report_name: reportName, page: page, max_records: PAGE_SIZE };
+    if(criteria) c2.criteria = criteria;
+    return C.DATA.getRecords(c2);
   }
-  return Promise.reject({ message:"No records method on ZOHO.CREATOR (need API.getAllRecords or DATA.getRecords). Available: "+info.keys.join(", ") });
+  return Promise.reject({ message:"No records method on ZOHO.CREATOR (need DATA.invokeCustomApi, API.getAllRecords or DATA.getRecords). Available: "+info.keys.join(", ") });
 }
 
 function withTimeout(p, ms, label){
@@ -601,7 +663,7 @@ function paintProgress(code){
   var lines = order.filter(function(o){return PROG[o[0]]!==undefined;}).map(function(o){
     return '<div style="font-size:12px"><b>'+o[1]+':</b> '+PROG[o[0]]+'</div>';
   }).join("");
-  var method = info.apiGetAll ? "API.getAllRecords" : (info.dataGet ? "DATA.getRecords" : "NONE FOUND ⚠");
+  var method = info.invoke ? ("Custom API: "+CUSTOM_API) : (info.apiGetAll ? "API.getAllRecords" : (info.dataGet ? "DATA.getRecords" : "NONE FOUND ⚠"));
   setStatus("info",
     'Fetching traceability for <b>'+code+'</b>… <span style="opacity:.7">(data method: <code>'+method+'</code>)</span>'+
     '<div style="margin-top:8px;display:grid;gap:2px">'+lines+'</div>');
@@ -616,7 +678,8 @@ function loadItem(code){
   var myLoad = ++LOAD_SEQ;
   function stale(){ return myLoad !== LOAD_SEQ; }
   RAW = {}; MR_MAP = {}; PO_BY_MR = {}; ALLOC_BY_MR = {}; TRANSIT_BY_MR = {}; RECEIVE_BY_MR = {}; BILL_BY_MR = {}; CN_HDR = {}; SO_BY_NO = {}; DISMISS_BY_SO = {}; _dismissedFetched = {}; STATE.rows = [];
-  PROG = { sdk: sdkInfo().apiGetAll || sdkInfo().dataGet ? "✓ ready" : "✗ no data method — keys: "+sdkInfo().keys.join(", ") };
+  var _si = sdkInfo();
+  PROG = { sdk: (_si.invoke || _si.apiGetAll || _si.dataGet) ? ("✓ ready"+(_si.invoke?" · via Custom API (owner privileges)":" · direct (viewer privileges)")) : "✗ no data method — keys: "+_si.keys.join(", ") };
   paintProgress(code);
 
   var specs = [
@@ -1349,7 +1412,7 @@ function boot(){
   $('test-code').addEventListener('keydown',function(e){ if(e.key==="Enter"){ var c=e.target.value.trim(); if(c) loadItem(c);} });
 
   // Diagnostics only when explicitly requested with ?debug=1
-  if(location.search.indexOf("debug=1")>-1){ var dbg=$('debug'); if(dbg){ dbg.hidden=false; dbg.open=true; } }
+  if(location.search.indexOf("debug=1")>-1){ window.__traceDebug=true; var dbg=$('debug'); if(dbg){ dbg.hidden=false; dbg.open=true; } }
 
   setStatus("info","Loading Creator SDK… <span style='opacity:.7'>(build "+BUILD+")</span>");
 
@@ -1390,7 +1453,7 @@ function boot(){
       "Open the browser Console for details.<br>"+
       "<span style='opacity:.75'>build "+BUILD+" · ZOHO present: "+(typeof ZOHO!=="undefined")+
       " · ZOHO.CREATOR keys: "+escapeHtml((info.keys||[]).join(", "))+
-      " · data method: "+(info.apiGetAll?"API.getAllRecords":(info.dataGet?"DATA.getRecords":"none"))+"</span>");
+      " · data method: "+(info.invoke?("Custom API "+CUSTOM_API):(info.apiGetAll?"API.getAllRecords":(info.dataGet?"DATA.getRecords":"none")))+"</span>");
     $('test-bar').style.display="block";
   }
 
@@ -1403,8 +1466,8 @@ function boot(){
     var C = (typeof ZOHO!=="undefined") ? ZOHO.CREATOR : null;
     var info = sdkInfo();
 
-    // 1) If the data API is already present, we're good — go.
-    if(info.apiGetAll || info.dataGet){ return done(proceed); }
+    // 1) If a data method is already present, we're good — go.
+    if(info.invoke || info.apiGetAll || info.dataGet){ return done(proceed); }
 
     // 2) If init() exists and we haven't called it, call it once — it wires up
     //    the data API after the handshake with the Creator parent frame.
@@ -1421,7 +1484,7 @@ function boot(){
 
     // 3) Keep waiting until the data API shows up or we time out.
     if(Date.now() - start > MAX_WAIT){
-      return done(function(){ giveUp("Waited "+(MAX_WAIT/1000)+"s; the data API (getAllRecords/getRecords) never appeared."); });
+      return done(function(){ giveUp("Waited "+(MAX_WAIT/1000)+"s; no data method (invokeCustomApi / getAllRecords / getRecords) appeared."); });
     }
     setTimeout(poll, 200);
   })();

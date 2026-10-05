@@ -1,0 +1,125 @@
+/* ============================================================================
+   CUSTOM API  :  getTraceabilityData
+   PURPOSE     :  Owner-privileged passthrough that reads any report in this app
+                  and returns its raw records. The widget calls this instead of
+                  ZOHO.CREATOR.DATA.getRecords so that data is read as the app
+                  OWNER (admin) — not as the logged-in viewer. This makes the
+                  "Permission denied / code 2898" problem go away for every user,
+                  because the viewer's own report/form permissions no longer apply.
+
+   WHY a passthrough (and not the whole join in Deluge):
+                  All the traceability joins / quantity splits / dismissed-SO
+                  logic already live in the widget JS and are confirmed correct.
+                  Reimplementing them in Deluge would risk regressions. This
+                  function only changes WHO reads the data, nothing else.
+
+   ----------------------------------------------------------------------------
+   HOW TO DEPLOY (admin, one time)
+   ----------------------------------------------------------------------------
+   1) Create a Zoho Creator OAuth connection (Setup -> Developer Space ->
+      Connections, or https://creator.zoho.in -> Settings -> Connections):
+        - Service            : Zoho OAuth  (Zoho Creator)
+        - Connection Link Name: creator_self        (must match CONN below)
+        - Scopes             : ZohoCreator.report.READ
+      Authorize it with an ADMIN account that can view ALL the reports below.
+
+   2) Microservices -> Custom API -> Create:
+        - Name / link name   : getTraceabilityData   (must match CUSTOM_API in widget)
+        - Method             : POST
+        - Response type      : JSON
+        - User scope         : All users   (so every viewer may invoke it)
+                               (Authentication: OAuth2 is fine with user scope = All)
+        - Parameters (arguments), in this order:
+            report      -> String   (mandatory)
+            criteria    -> String   (optional)
+            from_index  -> Number    (optional)
+            limit       -> Number    (optional)
+        - Paste the BODY below into the function editor. Make sure the generated
+          function signature's argument names match: report, criteria,
+          from_index, limit.
+
+   3) Set OWNER, APP and CONN constants below to match your app, then Save.
+
+   4) In index.html set  CUSTOM_API = "getTraceabilityData"  (already done) and
+      APP_NAME / CUSTOM_API_WORKSPACE if your workspace link name differs.
+   ============================================================================ */
+
+/* ---- function body (paste inside the Custom API function) ---------------- */
+
+response = Map();
+
+/* >>> EDIT THESE THREE TO MATCH YOUR APP <<< */
+OWNER      = "silvantiles";     /* application owner name (the <owner> in the app URL) */
+APP        = "silvan-tiles";    /* application link name                               */
+CONN       = "creator_self";    /* the OAuth connection link name created in step 1     */
+
+/* ---- normalise the incoming arguments (be tolerant of string/number) ----- */
+rep = "";
+if(report != null)
+{
+	rep = report.trim();
+}
+
+crit = "";
+if(criteria != null)
+{
+	crit = criteria.toString();
+}
+
+start = 1;
+if(from_index != null && from_index.toString().trim() != "")
+{
+	start = from_index.toString().toLong();
+}
+if(start < 1)
+{
+	start = 1;
+}
+
+lim = 200;
+if(limit != null && limit.toString().trim() != "")
+{
+	lim = limit.toString().toLong();
+}
+/* legacy getRecords caps at 200 per page */
+if(lim < 1 || lim > 200)
+{
+	lim = 200;
+}
+
+if(rep == "")
+{
+	response.put("code", 0);
+	response.put("data", List());
+	response.put("error", "report argument is required");
+	return response;
+}
+
+/* ---- read as the app owner, bypassing the viewer's permissions ----------- */
+try
+{
+	res = zoho.creator.getRecords(OWNER, APP, rep, crit, start, lim, CONN);
+	/* res is { "code": 3000, "data": [ ... ] }. "No records" comes back as
+	   code 3100 with an empty/absent data list — treat it as an empty page. */
+	code = 0;
+	if(res.get("code") != null)
+	{
+		code = res.get("code");
+	}
+	data = res.get("data");
+	if(data == null)
+	{
+		data = List();
+	}
+	response.put("code", code);
+	response.put("data", data);
+}
+catch (e)
+{
+	/* Never hard-fail the widget: return an empty page plus the reason. */
+	response.put("code", 0);
+	response.put("data", List());
+	response.put("error", e.toString());
+}
+
+return response;
