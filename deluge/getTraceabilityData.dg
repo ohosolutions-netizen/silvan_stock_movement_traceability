@@ -63,10 +63,11 @@ string for_traceability_report_fetch_data(string itemcode)
 					}
 				}
 			}
-			if(soNo != "")
+			if(soNo == "")
 			{
-				itemSoNos.put(soNo,"1");
+				continue;
 			}
+			itemSoNos.put(soNo,"1");
 			m = Map();
 			m.put("ID", sor.ID);
 			m.put("ITEM_CODE", sor.ITEM_CODE);
