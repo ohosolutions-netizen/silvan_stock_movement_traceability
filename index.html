@@ -206,7 +206,7 @@
 "use strict";
 
 /* Build marker — bump on each deploy so we can confirm the loaded version. */
-var BUILD = "2026-10-05-c";
+var BUILD = "2026-10-05-d";
 
 /* =========================================================================
    1) CONFIGURATION  — edit ONLY this block once you confirm link names.
@@ -227,10 +227,12 @@ var APP_NAME = "silvan-tiles";   // application link name (from the app URL)
    code 2898 / HTTP 403 per user) and no Zoho OAuth connection is required.
    If the Custom API isn't present (e.g. local preview), the widget falls back
    to reading directly as the viewer via the normal SDK — so nothing regresses.
+   The Custom API takes ONE argument (itemcode) and returns every report section
+   in a single response, so the widget calls it once per item (see loadBundle).
      CUSTOM_API           : the Custom API link name (must match the Deluge one)
      CUSTOM_API_WORKSPACE : workspace link name, only if it differs from default
    ------------------------------------------------------------------------- */
-var CUSTOM_API = "getTraceabilityData";
+var CUSTOM_API = "for_traceability_report_fetch_data";
 var CUSTOM_API_WORKSPACE = "";   // leave "" to use the default workspace
 
 var FIELD = {
@@ -500,51 +502,63 @@ function sdkInfo(){
   };
 }
 
-// The records array can be nested differently depending on how the Custom API
-// serialises the Deluge return. Dig it out tolerantly and normalise to {data,code}.
-function normalizeCustomApiResp(resp){
-  var code = null, data = null;
-  function asArr(x){ return Array.isArray(x) ? x : null; }
+// The Custom API returns ONE bundle per item: { code, data: { <reportName>:[...] } }.
+// invokeCustomApi may wrap that under result/response/output — dig out the object
+// whose values are the per-report arrays (the "data" map), tolerantly.
+function normalizeBundle(resp){
+  var found = null, err = null;
+  function looksLikeBundle(o){
+    if(!o || typeof o!=="object" || Array.isArray(o)) return false;
+    // a bundle has at least one of our known report keys as an array
+    var keys = ["API_ITEM_MASTER","SALES_ORDERS_ITEMWISE","All_Material_Request_Allocations","Material_Request_Report"];
+    return keys.some(function(k){ return Array.isArray(o[k]); });
+  }
   function scan(o, depth){
-    if(o==null || depth>5) return;
-    if(code===null && (o.code!=null) && (typeof o.code==="number"||/^\d+$/.test(o.code))) code = o.code;
-    if(data===null){
-      if(asArr(o.data)) data = o.data;
-      else if(asArr(o.records)) data = o.records;
-      else if(asArr(o.result)) data = o.result;
-    }
-    if(data===null && typeof o==="object"){
-      ["data","result","response","details","output","body"].forEach(function(k){
-        if(data===null && o[k] && typeof o[k]==="object") scan(o[k], depth+1);
+    if(o==null || depth>6 || found) return;
+    if(typeof o==="object" && o.error && !err) err = o.error;
+    if(looksLikeBundle(o)){ found = o; return; }
+    if(typeof o==="object"){
+      ["data","result","response","details","output","body","records"].forEach(function(k){
+        if(!found && o[k] && typeof o[k]==="object") scan(o[k], depth+1);
       });
     }
   }
-  if(Array.isArray(resp)) return { data:resp, code:3000 };
   scan(resp||{}, 0);
-  return { data: data||[], code: code };
+  return { sections: found || {}, error: err };
+}
+
+// One backend call per item load, cached by the load token. Every callGetRecords
+// below resolves from this single bundle instead of hitting the SDK per report.
+var _BUNDLE = { token:-1, promise:null };
+function loadBundle(){
+  if(_BUNDLE.token === LOAD_SEQ && _BUNDLE.promise) return _BUNDLE.promise;
+  _BUNDLE.token = LOAD_SEQ;
+  var cfg = {
+    api_name: CUSTOM_API,
+    http_method: "POST",
+    payload: { itemcode: STATE.itemCode }
+  };
+  if(CUSTOM_API_WORKSPACE) cfg.workspace_name = CUSTOM_API_WORKSPACE;
+  _BUNDLE.promise = ZOHO.CREATOR.DATA.invokeCustomApi(cfg).then(function(resp){
+    if(window.__traceDebug) try{ console.log("[bundle raw]", JSON.parse(JSON.stringify(resp))); }catch(_){ console.log("[bundle raw]", resp); }
+    var n = normalizeBundle(resp);
+    if(n.error) console.warn("[bundle] Deluge error:", n.error);
+    return n.sections;
+  });
+  return _BUNDLE.promise;
 }
 
 function callGetRecords(reportName, criteria, page){
   var C = ZOHO.CREATOR, info = sdkInfo();
 
-  // PREFERRED: read through the owner-privileged Deluge Custom API so the
-  // viewer's own permissions never block the fetch. The legacy getRecords the
-  // Custom API wraps pages by from_index (1-based) + limit, so translate page.
+  // PREFERRED: one owner-privileged Custom API call per item returns every report
+  // section at once. Serve this report's slice from that cached bundle (page 1
+  // carries everything; the data is already item-scoped so criteria is ignored).
   if(info.invoke && CUSTOM_API){
-    var fromIdx = (page-1)*PAGE_SIZE + 1;
-    var cfg = {
-      api_name: CUSTOM_API,
-      http_method: "POST",
-      payload: { report: reportName, criteria: criteria || "", from_index: fromIdx, limit: PAGE_SIZE }
-    };
-    if(CUSTOM_API_WORKSPACE) cfg.workspace_name = CUSTOM_API_WORKSPACE;
-    return C.DATA.invokeCustomApi(cfg).then(function(resp){
-      if(window.__traceDebug) try{ console.log("[invokeCustomApi raw]", reportName, JSON.parse(JSON.stringify(resp))); }catch(_){ console.log("[invokeCustomApi raw]", reportName, resp); }
-      var norm = normalizeCustomApiResp(resp);
-      // Deluge surfaces a read error as an `error` field (data stays empty).
-      var errTxt = (resp && (resp.error || (resp.data && resp.data.error))) || "";
-      if(errTxt && !norm.data.length){ return Promise.reject({ message:String(errTxt), code:norm.code }); }
-      return { data: norm.data };
+    if(page > 1) return Promise.resolve({ data: [] });
+    return loadBundle().then(function(sections){
+      var arr = (sections && Array.isArray(sections[reportName])) ? sections[reportName] : [];
+      return { data: arr };
     });
   }
 
