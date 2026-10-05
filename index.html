@@ -206,7 +206,7 @@
 "use strict";
 
 /* Build marker — bump on each deploy so we can confirm the loaded version. */
-var BUILD = "2026-10-05-b";
+var BUILD = "2026-10-05-c";
 
 /* =========================================================================
    1) CONFIGURATION  — edit ONLY this block once you confirm link names.
@@ -222,8 +222,9 @@ var APP_NAME = "silvan-tiles";   // application link name (from the app URL)
 /* -------------------------------------------------------------------------
    Owner-privileged data access.
    All reads go through a Deluge Custom API (see deluge/getTraceabilityData.dg)
-   that runs as the app OWNER, so the logged-in viewer's own report/form
-   permissions never block a fetch (no more code 2898 / HTTP 403 per user).
+   that reads with native fetch (resp = Form[criteria]) as the app OWNER, so the
+   logged-in viewer's own report/form permissions never block a fetch (no more
+   code 2898 / HTTP 403 per user) and no Zoho OAuth connection is required.
    If the Custom API isn't present (e.g. local preview), the widget falls back
    to reading directly as the viewer via the normal SDK — so nothing regresses.
      CUSTOM_API           : the Custom API link name (must match the Deluge one)

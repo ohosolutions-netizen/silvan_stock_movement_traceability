@@ -1,125 +1,468 @@
 /* ============================================================================
-   CUSTOM API  :  getTraceabilityData
-   PURPOSE     :  Owner-privileged passthrough that reads any report in this app
-                  and returns its raw records. The widget calls this instead of
-                  ZOHO.CREATOR.DATA.getRecords so that data is read as the app
-                  OWNER (admin) — not as the logged-in viewer. This makes the
-                  "Permission denied / code 2898" problem go away for every user,
-                  because the viewer's own report/form permissions no longer apply.
-
-   WHY a passthrough (and not the whole join in Deluge):
-                  All the traceability joins / quantity splits / dismissed-SO
-                  logic already live in the widget JS and are confirmed correct.
-                  Reimplementing them in Deluge would risk regressions. This
-                  function only changes WHO reads the data, nothing else.
-
+   CUSTOM API : getTraceabilityData        (NATIVE FETCH version — no connection)
    ----------------------------------------------------------------------------
-   HOW TO DEPLOY (admin, one time)
-   ----------------------------------------------------------------------------
-   1) Create a Zoho Creator OAuth connection (Setup -> Developer Space ->
-      Connections, or https://creator.zoho.in -> Settings -> Connections):
-        - Service            : Zoho OAuth  (Zoho Creator)
-        - Connection Link Name: creator_self        (must match CONN below)
-        - Scopes             : ZohoCreator.report.READ
-      Authorize it with an ADMIN account that can view ALL the reports below.
+   Reads app data with native Deluge fetch  resp = Form[criteria]  and returns it
+   in the SAME JSON shape the widget already parses. Runs as the app OWNER, so a
+   viewer's own report/form permissions never block a fetch (no code 2898 / 403).
+   Because it is native fetch, NO Zoho OAuth connection is required.
 
-   2) Microservices -> Custom API -> Create:
-        - Name / link name   : getTraceabilityData   (must match CUSTOM_API in widget)
-        - Method             : POST
-        - Response type      : JSON
-        - User scope         : All users   (so every viewer may invoke it)
-                               (Authentication: OAuth2 is fine with user scope = All)
-        - Parameters (arguments), in this order:
-            report      -> String   (mandatory)
-            criteria    -> String   (optional)
-            from_index  -> Number    (optional)
-            limit       -> Number    (optional)
-        - Paste the BODY below into the function editor. Make sure the generated
-          function signature's argument names match: report, criteria,
-          from_index, limit.
+   DEPLOY (admin, one time)
+   ------------------------
+   Microservices -> Custom API -> Create:
+     - Name / link name : getTraceabilityData   (must match CUSTOM_API in index.html)
+     - Method           : POST
+     - Response type     : JSON
+     - User scope        : All users             (so every viewer may call it)
+     - Parameters (arguments), these exact names & order:
+         report      -> String  (mandatory)
+         criteria    -> String
+         from_index  -> Number
+         limit       -> Number
+     - Paste the BODY below into the function editor; make the generated signature's
+       argument names match: report, criteria, from_index, limit.
 
-   3) Set OWNER, APP and CONN constants below to match your app, then Save.
-
-   4) In index.html set  CUSTOM_API = "getTraceabilityData"  (already done) and
-      APP_NAME / CUSTOM_API_WORKSPACE if your workspace link name differs.
+   NOTES / THINGS TO VERIFY IN CREATOR  (native fetch differs from the REST reports)
+   --------------------------------------------------------------------------------
+   1) Report-level filters are NOT replicated. The API_* reports may hide void rows;
+      native fetch of the base FORM returns everything, so void rows are excluded
+      here explicitly via status fields (PO_Status / POR_Status / STATUS /
+      Credit_Note_Status). Sales Invoices have no status field on the form, so void
+      invoices (if any) are NOT filtered — tell me if you need that and how void is marked.
+   2) Lookup DISPLAY names (Customer, Salesman, Branch) are read by dereferencing the
+      referenced form's name field: Customer.Name, Employee.Name, Branch.Name.
+      If any of those forms use a different name field, adjust the ".Name" below.
+   3) Dates are returned as "dd-MMM-yyyy" to match the widget.
+   4) Native fetch returns the full matching set (no 200-row page cap), so the whole
+      result is returned on from_index==1 and an empty page for from_index>1.
    ============================================================================ */
 
-/* ---- function body (paste inside the Custom API function) ---------------- */
+/* ----------------------- function body starts here ----------------------- */
 
 response = Map();
+data = List();
 
-/* >>> EDIT THESE THREE TO MATCH YOUR APP <<< */
-OWNER      = "silvantiles";     /* application owner name (the <owner> in the app URL) */
-APP        = "silvan-tiles";    /* application link name                               */
-CONN       = "creator_self";    /* the OAuth connection link name created in step 1     */
+/* paging: native fetch returns everything at once -> only page 1 has data */
+startIndex = 1;
+if(from_index != null && from_index.toString().trim() != "")
+{
+	startIndex = from_index.toString().toLong();
+}
+if(startIndex > 1)
+{
+	response.put("code", 3000);
+	response.put("data", data);
+	return response;
+}
 
-/* ---- normalise the incoming arguments (be tolerant of string/number) ----- */
 rep = "";
 if(report != null)
 {
 	rep = report.trim();
 }
-
 crit = "";
 if(criteria != null)
 {
-	crit = criteria.toString();
+	crit = criteria.toString().trim();
 }
 
-start = 1;
-if(from_index != null && from_index.toString().trim() != "")
+/* item code parsed out of a criteria like (Line_Item.ITEM_CODE == "99") — used to
+   filter invoices / credit notes by their line item in Deluge. "" means no filter. */
+itemCode = "";
+if(crit.contains("\""))
 {
-	start = from_index.toString().toLong();
-}
-if(start < 1)
-{
-	start = 1;
+	itemCode = crit.subString(crit.indexOf("\"") + 1, crit.lastIndexOf("\""));
 }
 
-lim = 200;
-if(limit != null && limit.toString().trim() != "")
-{
-	lim = limit.toString().toLong();
-}
-/* legacy getRecords caps at 200 per page */
-if(lim < 1 || lim > 200)
-{
-	lim = 200;
-}
+/* a safe "fetch all" criteria when none is supplied */
+allCrit = "ID != 0";
+useCrit = if(crit == "", allCrit, crit);
 
-if(rep == "")
-{
-	response.put("code", 0);
-	response.put("data", List());
-	response.put("error", "report argument is required");
-	return response;
-}
-
-/* ---- read as the app owner, bypassing the viewer's permissions ----------- */
 try
 {
-	res = zoho.creator.getRecords(OWNER, APP, rep, crit, start, lim, CONN);
-	/* res is { "code": 3000, "data": [ ... ] }. "No records" comes back as
-	   code 3100 with an empty/absent data list — treat it as an empty page. */
-	code = 0;
-	if(res.get("code") != null)
+	/* =====================================================================
+	   ITEM MASTER   (report API_ITEM_MASTER  ->  form Item_Master)
+	   ===================================================================== */
+	if(rep == "API_ITEM_MASTER")
 	{
-		code = res.get("code");
+		recs = Item_Master[useCrit];
+		for each r in recs
+		{
+			m = Map();
+			m.put("ID", r.ID);
+			m.put("Item_Code", r.Item_Code);
+			m.put("Item_Name", r.Item_Name);
+			m.put("Unit", r.Unit);
+			data.add(m);
+		}
 	}
-	data = res.get("data");
-	if(data == null)
+	/* =====================================================================
+	   SALES ORDERS ITEMWISE   (report SALES_ORDERS_ITEMWISE -> Sales_Order_Subform)
+	   plus the dismissed-SO retry (same report) — DISMISSED handled separately.
+	   ===================================================================== */
+	else if(rep == "SALES_ORDERS_ITEMWISE")
 	{
-		data = List();
+		recs = Sales_Order_Subform[useCrit];
+		for each r in recs
+		{
+			m = Map();
+			m.put("ID", r.ID);
+			m.put("ITEM_CODE", r.ITEM_CODE);
+			m.put("QTY", r.QTY);
+			m.put("RATE", r.RATE);
+			m.put("UNIT", r.UNIT);
+			m.put("Dismissed_Qty", r.Dismissed_Qty);
+			/* ITEM_NAME as an object: widget reads .Item_Code and the display value */
+			nm = Map();
+			nm.put("Item_Code", r.ITEM_CODE);
+			try { nm.put("zc_display_value", r.ITEM_NAME.Item_Name); } catch (e1) { nm.put("zc_display_value", ""); }
+			m.put("ITEM_NAME", nm);
+			/* parent Sales Order (via the "Lookup" lookup field) -> dotted keys */
+			soNo = "";
+			soDate = "";
+			custName = "";
+			smName = "";
+			try
+			{
+				soId = r.Lookup;
+				if(soId != null)
+				{
+					sos = Sales_Order[ID == soId];
+					for each s in sos
+					{
+						soNo = s.Order_No;
+						if(s.Date_field != null) { soDate = s.Date_field.toString("dd-MMM-yyyy"); }
+						if(s.Customer != null) { custName = s.Customer.Name; }      /* adjust .Name if Customer uses another name field */
+						if(s.Sales_Man != null) { smName = s.Sales_Man.Name; }      /* adjust .Name if Employee uses another name field */
+					}
+				}
+			}
+			catch (e2) { }
+			m.put("Lookup.Order_No", soNo);
+			m.put("Lookup.Date_field", soDate);
+			cm = Map(); cm.put("Name", custName); cm.put("zc_display_value", custName);
+			m.put("Lookup.Customer", cm);
+			m.put("Lookup.Sales_Man", smName);
+			data.add(m);
+		}
 	}
-	response.put("code", code);
+	/* =====================================================================
+	   DISMISSED SALES ORDER  (report Dismissed_Sales_Order -> Sales_Order_Subform,
+	   only rows with a dismissed quantity).
+	   ===================================================================== */
+	else if(rep == "Dismissed_Sales_Order")
+	{
+		recs = Sales_Order_Subform[useCrit];
+		for each r in recs
+		{
+			dq = r.Dismissed_Qty;
+			if(dq != null && dq > 0)
+			{
+				m = Map();
+				m.put("ID", r.ID);
+				m.put("ITEM_CODE", r.ITEM_CODE);
+				m.put("Dismissed_Qty", dq);
+				m.put("QTY", r.QTY);
+				soNo = "";
+				custName = "";
+				smName = "";
+				try
+				{
+					soId = r.Lookup;
+					if(soId != null)
+					{
+						sos = Sales_Order[ID == soId];
+						for each s in sos
+						{
+							soNo = s.Order_No;
+							if(s.Customer != null) { custName = s.Customer.Name; }
+							if(s.Sales_Man != null) { smName = s.Sales_Man.Name; }
+						}
+					}
+				}
+				catch (e2) { }
+				lk = Map(); lk.put("Order_No", soNo); lk.put("zc_display_value", soNo);
+				m.put("Lookup", lk);
+				cm = Map(); cm.put("Name", custName);
+				m.put("Lookup.Customer", cm);
+				m.put("Lookup.Sales_Man", smName);
+				data.add(m);
+			}
+		}
+	}
+	/* =====================================================================
+	   PURCHASE ORDERS ITEMWISE (report PURCHASE_ORDERS_ITEMWISE -> Purchase_Order_Subform)
+	   ===================================================================== */
+	else if(rep == "PURCHASE_ORDERS_ITEMWISE")
+	{
+		recs = Purchase_Order_Subform[useCrit];
+		for each r in recs
+		{
+			poNo = "";
+			poDate = "";
+			poStatus = "";
+			try
+			{
+				if(r.Purchase_Order != null)
+				{
+					poNo = r.Purchase_Order.Order_No;
+					if(r.Purchase_Order.Date_field != null) { poDate = r.Purchase_Order.Date_field.toString("dd-MMM-yyyy"); }
+					poStatus = r.Purchase_Order.PO_Status;
+				}
+			}
+			catch (e1) { }
+			if(!poStatus.equalsIgnoreCase("Void"))     /* skip void POs */
+			{
+				m = Map();
+				m.put("ITEMCODE", r.ITEMCODE);
+				m.put("QTY", r.QTY);
+				m.put("Purchase_Order", poNo);
+				m.put("Purchase_Order.Date_field", poDate);
+				data.add(m);
+			}
+		}
+	}
+	/* =====================================================================
+	   PURCHASE ORDER HEADER  (report Purchase_Order_Report -> Purchase_Order)
+	   Order_No + Date_field + PO_Status + Material_Request (multi-lookup -> MR).
+	   ===================================================================== */
+	else if(rep == "Purchase_Order_Report")
+	{
+		recs = Purchase_Order[useCrit];
+		for each r in recs
+		{
+			m = Map();
+			m.put("Order_No", r.Order_No);
+			if(r.Date_field != null) { m.put("Date_field", r.Date_field.toString("dd-MMM-yyyy")); } else { m.put("Date_field", ""); }
+			m.put("PO_Status", r.PO_Status);
+			mrs = List();
+			try
+			{
+				for each mid in r.Material_Request
+				{
+					mrows = Material_Request[ID == mid];
+					for each mx in mrows
+					{
+						one = Map(); one.put("Request_No", mx.Request_No);
+						mrs.add(one);
+					}
+				}
+			}
+			catch (e1) { }
+			m.put("Material_Request", mrs);
+			data.add(m);
+		}
+	}
+	/* =====================================================================
+	   MATERIAL REQUEST  (report Material_Request_Report -> Material_Request)
+	   Request_No + Date_field + branches + Sales_Order_no (multi-lookup -> SO).
+	   ===================================================================== */
+	else if(rep == "Material_Request_Report")
+	{
+		recs = Material_Request[useCrit];
+		for each r in recs
+		{
+			m = Map();
+			m.put("Request_No", r.Request_No);
+			if(r.Date_field != null) { m.put("Date_field", r.Date_field.toString("dd-MMM-yyyy")); } else { m.put("Date_field", ""); }
+			try { if(r.Destination_Branch != null) { m.put("Destination_Branch", r.Destination_Branch.Name); } } catch (e1) { m.put("Destination_Branch", ""); }
+			try { if(r.Source_Branch != null) { m.put("Source_Branch", r.Source_Branch.Name); } } catch (e2) { m.put("Source_Branch", ""); }
+			sorefs = List();
+			try
+			{
+				for each sid in r.Sales_Order_no
+				{
+					srows = Sales_Order[ID == sid];
+					for each sx in srows
+					{
+						one = Map(); one.put("Order_No", sx.Order_No);
+						sorefs.add(one);
+					}
+				}
+			}
+			catch (e3) { }
+			m.put("Sales_Order_no", sorefs);
+			data.add(m);
+		}
+	}
+	/* =====================================================================
+	   ALLOCATIONS  (report All_Material_Request_Allocations -> MATERIAL_REQUEST_ALLOCATION)
+	   Header with Item_Master / Purchase_Transist / Purchase_Receives links.
+	   ===================================================================== */
+	else if(rep == "All_Material_Request_Allocations")
+	{
+		recs = MATERIAL_REQUEST_ALLOCATION[useCrit];
+		for each r in recs
+		{
+			m = Map();
+			m.put("ID", r.ID);
+			if(r.Item_Master != null) { im = Map(); im.put("ID", r.Item_Master); m.put("Item_Master", im); }
+			if(r.Purchase_Transist != null) { tm = Map(); tm.put("ID", r.Purchase_Transist); m.put("Purchase_Transist", tm); }
+			if(r.Purchase_Receives != null)
+			{
+				rm = Map();
+				rm.put("ID", r.Purchase_Receives);
+				try { rm.put("PO_receive_No", r.Purchase_Receives.PO_receive_No); } catch (e1) { }
+				m.put("Purchase_Receives", rm);
+			}
+			data.add(m);
+		}
+	}
+	/* =====================================================================
+	   ALLOCATION QTY SUBFORM
+	   (report MATERIAL_REQUEST_ALLOCATION_SUBFORM_Report -> MATERIAL_REQUEST_ALLOCATION_SUBFORM)
+	   ===================================================================== */
+	else if(rep == "MATERIAL_REQUEST_ALLOCATION_SUBFORM_Report")
+	{
+		recs = MATERIAL_REQUEST_ALLOCATION_SUBFORM[useCrit];
+		for each r in recs
+		{
+			m = Map();
+			if(r.MATERIAL_REQUEST_ALLOCATION != null) { am = Map(); am.put("ID", r.MATERIAL_REQUEST_ALLOCATION); m.put("MATERIAL_REQUEST_ALLOCATION", am); }
+			mrMap = Map();
+			try { if(r.Material_Request != null) { mrMap.put("Request_No", r.Material_Request.Request_No); } } catch (e1) { }
+			m.put("Material_Request", mrMap);
+			m.put("QTY", r.QTY);
+			m.put("REQ_QTY", r.REQ_QTY);
+			if(r.Sales_Order_Subform != null) { sm = Map(); sm.put("ID", r.Sales_Order_Subform); m.put("Sales_Order_Subform", sm); }
+			data.add(m);
+		}
+	}
+	/* =====================================================================
+	   PURCHASE TRANSIT  (report API_PURCHASE_TRANSIT -> Purchase_Transist)
+	   ===================================================================== */
+	else if(rep == "API_PURCHASE_TRANSIT")
+	{
+		recs = Purchase_Transist[useCrit];
+		for each r in recs
+		{
+			m = Map();
+			m.put("ID", r.ID);
+			m.put("Order_No", r.Order_No);
+			if(r.Delivery_Date != null) { m.put("Delivery_Date", r.Delivery_Date.toString("dd-MMM-yyyy")); } else { m.put("Delivery_Date", ""); }
+			data.add(m);
+		}
+	}
+	/* =====================================================================
+	   PURCHASE RECEIVE  (report API_PURCHASE_RECEIVE -> Purchase_Receives)
+	   ===================================================================== */
+	else if(rep == "API_PURCHASE_RECEIVE")
+	{
+		recs = Purchase_Receives[useCrit];
+		for each r in recs
+		{
+			m = Map();
+			m.put("ID", r.ID);
+			m.put("PO_receive_No", r.PO_receive_No);
+			m.put("POR_Status", r.POR_Status);
+			if(r.Purchase_Receives_Date != null) { m.put("Purchase_Receives_Date", r.Purchase_Receives_Date.toString("dd-MMM-yyyy")); } else { m.put("Purchase_Receives_Date", ""); }
+			data.add(m);
+		}
+	}
+	/* =====================================================================
+	   BILLS  (report API_of_BILLS -> Bill)
+	   Bill_No + BilDate + Purchase_Receives_No (multi-lookup -> receive ids).
+	   ===================================================================== */
+	else if(rep == "API_of_BILLS")
+	{
+		recs = Bill[useCrit];
+		for each r in recs
+		{
+			if(!r.STATUS.equalsIgnoreCase("Void") && !r.STATUS.equalsIgnoreCase("Deleted"))
+			{
+				m = Map();
+				m.put("Bill_No", r.Bill_No);
+				if(r.BilDate != null) { m.put("BilDate", r.BilDate.toString("dd-MMM-yyyy")); } else { m.put("BilDate", ""); }
+				m.put("STATUS", r.STATUS);
+				prl = List();
+				try
+				{
+					for each pid in r.Purchase_Receives_No
+					{
+						one = Map(); one.put("ID", pid);
+						prl.add(one);
+					}
+				}
+				catch (e1) { }
+				m.put("Purchase_Receives_No", prl);
+				data.add(m);
+			}
+		}
+	}
+	/* =====================================================================
+	   SALES INVOICES  (report API_SALES_INVOICES -> Sales_Invoice)
+	   Filtered to invoices that contain a line for the requested item code.
+	   ===================================================================== */
+	else if(rep == "API_SALES_INVOICES")
+	{
+		recs = Sales_Invoice[allCrit];
+		for each r in recs
+		{
+			items = List();
+			for each li in r.Line_Item
+			{
+				if(itemCode == "" || li.ITEM_CODE == itemCode)
+				{
+					one = Map(); one.put("ITEM_CODE", li.ITEM_CODE); one.put("QTY", li.QTY);
+					items.add(one);
+				}
+			}
+			if(!items.isEmpty())
+			{
+				m = Map();
+				m.put("Sales_Invoice_No", r.Invoice_No);
+				if(r.Invoice_Date != null) { m.put("Sales_Invoice_Date", r.Invoice_Date.toString("dd-MMM-yyyy")); } else { m.put("Sales_Invoice_Date", ""); }
+				soNo = "";
+				try { if(r.Sales_Order_NO != null) { soNo = r.Sales_Order_NO.Order_No; } } catch (e1) { }
+				m.put("Sales_Order_no", soNo);
+				try { if(r.Customer != null) { m.put("Customer", r.Customer.Name); } } catch (e2) { m.put("Customer", ""); }
+				m.put("Status", "");     /* Sales_Invoice form has no void status field — see note 1 */
+				m.put("Line_Item", items);
+				data.add(m);
+			}
+		}
+	}
+	/* =====================================================================
+	   CREDIT NOTES  (report API_CREDIT_NOTES -> Credit_Note)
+	   Filtered to credit notes that contain a line for the requested item code.
+	   ===================================================================== */
+	else if(rep == "API_CREDIT_NOTES")
+	{
+		recs = Credit_Note[allCrit];
+		for each r in recs
+		{
+			items = List();
+			for each li in r.Line_Item
+			{
+				if(itemCode == "" || li.ITEM_CODE == itemCode)
+				{
+					one = Map(); one.put("ITEM_CODE", li.ITEM_CODE); one.put("QTY", li.QTY);
+					items.add(one);
+				}
+			}
+			if(!items.isEmpty())
+			{
+				m = Map();
+				m.put("Credit_No", r.Credit_No);
+				if(r.Credit_Note_Date != null) { m.put("Credit_Note_Date", r.Credit_Note_Date.toString("dd-MMM-yyyy")); } else { m.put("Credit_Note_Date", ""); }
+				m.put("Credit_Note_Status", r.Credit_Note_Status);
+				m.put("Line_Item", items);
+				data.add(m);
+			}
+		}
+	}
+	else
+	{
+		response.put("error", "Unknown report: " + rep);
+	}
+
+	response.put("code", 3000);
 	response.put("data", data);
 }
-catch (e)
+catch (ex)
 {
-	/* Never hard-fail the widget: return an empty page plus the reason. */
 	response.put("code", 0);
-	response.put("data", List());
-	response.put("error", e.toString());
+	response.put("data", data);
+	response.put("error", ex.toString());
 }
 
 return response;
