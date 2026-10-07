@@ -207,7 +207,7 @@
 "use strict";
 
 /* Build marker — bump on each deploy so we can confirm the loaded version. */
-var BUILD = "2026-10-05-h";
+var BUILD = "2026-10-07-a";
 
 /* =========================================================================
    1) CONFIGURATION  — edit ONLY this block once you confirm link names.
@@ -938,12 +938,17 @@ function loadItem(code){
         all.forEach(function(rec){
           var mr = lv(rec[MF.mrNo]), date = lv(rec[MF.date]);
           var branch = lv(rec[MF.destBranch]) || lv(rec[MF.srcBranch]);
-          var salesman = lv(rec["Sales_Order.Sales_Man"]) || valueByKeyLike(rec, ["sales_man","salesman"], []);
+          // Salesman + requested qty now come from the MR LINE ITEM (Nos / SALES_MAN),
+          // attached per-SO on each ref, with a record-level fallback (Item_Nos/Salesman).
+          var topSm  = lv(rec.Salesman) || lv(rec["Sales_Order.Sales_Man"]) || valueByKeyLike(rec, ["sales_man","salesman"], []);
+          var topNos = num(rec.Item_Nos);
           var refs = rec[MF.soRefs];
           var list = Array.isArray(refs) ? refs : (refs ? [refs] : []);
           list.forEach(function(ref){
             var soNo = (ref && typeof ref==="object") ? lv(ref[MF.soOrderNo] || ref.zc_display_value || ref.display_value) : lv(ref);
-            if(soNo) MR_MAP[soNo] = { mr:mr, date:date, branch:branch, salesman:salesman };
+            var refNos = (ref && typeof ref==="object" && ref.Nos!=null) ? num(ref.Nos) : 0;
+            var refSm  = (ref && typeof ref==="object") ? lv(ref.Salesman) : "";
+            if(soNo) MR_MAP[soNo] = { mr:mr, date:date, branch:branch, salesman:(refSm||topSm), nos:(refNos||topNos) };
           });
         });
         PROG.materialRequest = "✓ "+all.length+" record(s)";
@@ -1104,7 +1109,7 @@ function transformAndRender(D){
       code: STATE.itemCode,
       branch: (mrHit && mrHit.branch) ? mrHit.branch : (lv(r[S.customer]) || "—"), // warehouse/branch from MR
       customer: lv(r[S.customer]),         // shown as subtext under the branch
-      salesman: lv(r[S.salesman]) || "—",
+      salesman: lv(r[S.salesman]) || (mrHit && mrHit.salesman) || "—",
       vendor:"—",
       so:[ soNo, lv(r[S.orderDate]) ],
       mr: mrHit ? [mrHit.mr, mrHit.date] : ["",""],
@@ -1115,9 +1120,10 @@ function transformAndRender(D){
       rate: num(r["RATE"]),
       unit: lv(r[S.unit]) || "box",
       poGroup: poNo || null,
-      // MR = the Sales Order's requested qty. PO = fill-bigger-first split of the
-      // PO total (below). Transit/Receive/Bill quantities come from their lists.
-      mrQty: (SO_REQ[soNo] != null ? SO_REQ[soNo] : ordered),
+      // MR = the Material Request line item's requested qty (Nos). Falls back to the
+      // SO requested qty only when the MR line Nos isn't available. PO = fill-bigger-
+      // first split (below). Transit/Receive/Bill quantities come from their lists.
+      mrQty: ((mrHit && mrHit.nos) ? mrHit.nos : (SO_REQ[soNo] != null ? SO_REQ[soNo] : ordered)),
       poQty: 0,
       billQty: billList.reduce(function(a,x){ return a+num(x.qty); }, 0),
       invoices: rowInv
@@ -1133,7 +1139,7 @@ function transformAndRender(D){
   // item-wise report. Build it from the MR/allocation side, and recover the SO
   // (customer/salesman/dismissed qty) by fetching it by number.
   var mrToSo = {};
-  Object.keys(MR_MAP).forEach(function(so){ var m=MR_MAP[so]; if(m&&m.mr) mrToSo[m.mr]={so:so, date:m.date, branch:m.branch}; });
+  Object.keys(MR_MAP).forEach(function(so){ var m=MR_MAP[so]; if(m&&m.mr) mrToSo[m.mr]={so:so, date:m.date, branch:m.branch, salesman:m.salesman, nos:m.nos}; });
   var shownMr = {};
   rows.forEach(function(r){ if(r.mr && r.mr[0]) shownMr[r.mr[0]] = true; });
   var needSo = [];
@@ -1147,7 +1153,7 @@ function transformAndRender(D){
     // Dismissed qty + total from the Dismissed_Sales_Order report (preferred);
     // else the fetched SO line; else assume the whole request was dismissed.
     var dInfo = DISMISS_BY_SO[si.so];
-    var reqQ = (SO_REQ[si.so] != null ? SO_REQ[si.so] : a.reqQty);   // MR request = SO qty
+    var reqQ = (si.nos ? si.nos : (SO_REQ[si.so] != null ? SO_REQ[si.so] : a.reqQty));   // MR line Nos, else SO qty
     var dis = dInfo ? dInfo.dismissed : (found ? (det.dismissed || 0) : reqQ);
     var soQty = reqQ;
     rows.push({

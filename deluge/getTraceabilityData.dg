@@ -337,6 +337,73 @@ string for_traceability_report_fetch_data(string itemcode)
 		mrecs = Material_Request[ID != 0];
 		for each mrr in mrecs
 		{
+			soNos = Map();
+			soSm = Map();
+			itemNosSum = 0;
+			lineSm = "";
+			if(mrr.Line_Item != null)
+			{
+				for each mli in mrr.Line_Item
+				{
+					isItem = false;
+					try
+					{
+						if(mli.Item != null && mli.Item.Item_Code == code)
+						{
+							isItem = true;
+						}
+					}
+					catch (e10)
+					{
+						isItem = false;
+					}
+					if(isItem)
+					{
+						lineNos = 0;
+						if(mli.Nos != null)
+						{
+							lineNos = mli.Nos;
+						}
+						itemNosSum = itemNosSum + lineNos;
+						try
+						{
+							if(mli.SALES_MAN != null)
+							{
+								lineSm = mli.SALES_MAN.Name;
+							}
+						}
+						catch (e11)
+						{
+							lineSm = lineSm;
+						}
+						if(mli.Sales_Order != null)
+						{
+							for each lso in mli.Sales_Order
+							{
+								lsoNo = "";
+								try
+								{
+									lsoNo = lso.Order_No;
+								}
+								catch (e12)
+								{
+									lsoNo = "";
+								}
+								if(lsoNo != "")
+								{
+									prevNos = 0;
+									if(soNos.get(lsoNo) != null)
+									{
+										prevNos = soNos.get(lsoNo);
+									}
+									soNos.put(lsoNo, prevNos + lineNos);
+									soSm.put(lsoNo, lineSm);
+								}
+							}
+						}
+					}
+				}
+			}
 			refs = List();
 			keep = false;
 			if(mrr.Sales_Order_no != null)
@@ -354,6 +421,14 @@ string for_traceability_report_fetch_data(string itemcode)
 					}
 					one = Map();
 					one.put("Order_No", ono);
+					if(soNos.get(ono) != null)
+					{
+						one.put("Nos", soNos.get(ono));
+					}
+					if(soSm.get(ono) != null)
+					{
+						one.put("Salesman", soSm.get(ono));
+					}
 					refs.add(one);
 					if(ono != "" && itemSoNos.get(ono) != null)
 					{
@@ -403,6 +478,8 @@ string for_traceability_report_fetch_data(string itemcode)
 				}
 				m.put("Destination_Branch", dB);
 				m.put("Source_Branch", sB);
+				m.put("Item_Nos", itemNosSum);
+				m.put("Salesman", lineSm);
 				m.put("Sales_Order_no", refs);
 				mrList.add(m);
 			}
