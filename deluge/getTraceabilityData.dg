@@ -259,7 +259,7 @@ string for_traceability_report_fetch_data(string itemcode)
 				}
 			}
 		}
-		if(receiveSeen.size() > 0)
+		if(!receiveList.isEmpty())
 		{
 			allBills = Bill[ID != 0];
 			for each b in allBills
@@ -276,16 +276,8 @@ string for_traceability_report_fetch_data(string itemcode)
 						matchedPrl = List();
 						for each prRec in b.Purchase_Receives_No
 						{
-							prid = "";
-							try
-							{
-								prid = prRec.ID.toString();
-							}
-							catch (e20)
-							{
-								prid = "";
-							}
-							if(prid != "" && receiveSeen.get(prid) != null)
+							prid = prRec.ID.toString();
+							if(receiveSeen.get(prid) != null)
 							{
 								pm = Map();
 								pm.put("ID", prRec.ID);
