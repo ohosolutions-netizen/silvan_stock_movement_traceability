@@ -257,32 +257,57 @@ string for_traceability_report_fetch_data(string itemcode)
 						receiveList.add(rr);
 					}
 				}
-				if(a.Bill != null && a.Purchase_Receives != null)
+			}
+		}
+		if(receiveSeen.size() > 0)
+		{
+			allBills = Bill[ID != 0];
+			for each b in allBills
+			{
+				bstat = "";
+				if(b.STATUS != null)
 				{
-					bstat = "";
-					if(a.Bill.STATUS != null)
+					bstat = b.STATUS;
+				}
+				if(bstat != "Void" && bstat != "Deleted")
+				{
+					if(b.Purchase_Receives_No != null)
 					{
-						bstat = a.Bill.STATUS;
-					}
-					if(bstat != "Void" && bstat != "Deleted")
-					{
-						bm = Map();
-						bm.put("Bill_No", a.Bill.Bill_No);
-						if(a.Bill.BilDate != null)
+						matchedPrl = List();
+						for each prRec in b.Purchase_Receives_No
 						{
-							bm.put("BilDate", a.Bill.BilDate.toString("dd-MMM-yyyy"));
+							prid = "";
+							try
+							{
+								prid = prRec.ID.toString();
+							}
+							catch (e20)
+							{
+								prid = "";
+							}
+							if(prid != "" && receiveSeen.get(prid) != null)
+							{
+								pm = Map();
+								pm.put("ID", prRec.ID);
+								matchedPrl.add(pm);
+							}
 						}
-						else
+						if(!matchedPrl.isEmpty())
 						{
-							bm.put("BilDate", "");
+							bm = Map();
+							bm.put("Bill_No", b.Bill_No);
+							if(b.BilDate != null)
+							{
+								bm.put("BilDate", b.BilDate.toString("dd-MMM-yyyy"));
+							}
+							else
+							{
+								bm.put("BilDate", "");
+							}
+							bm.put("STATUS", bstat);
+							bm.put("Purchase_Receives_No", matchedPrl);
+							billList.add(bm);
 						}
-						bm.put("STATUS", bstat);
-						prl = List();
-						one = Map();
-						one.put("ID", a.Purchase_Receives.ID);
-						prl.add(one);
-						bm.put("Purchase_Receives_No", prl);
-						billList.add(bm);
 					}
 				}
 			}
